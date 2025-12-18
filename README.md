@@ -1,3 +1,24 @@
+
+    This software is based on the project "Geocloud2"
+    by MapCentia ApS
+    https://github.com/mapcentia/geocloud2
+
+    Original work:
+    Copyright (C) MapCentia ApS and contributors
+
+    Modifications:
+    Copyright (C) 2025 Geopartner
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, version 3.
+
+    This software is provided "as is", without warranty of any kind, express or
+    implied. See the GNU Affero General Public License for more details.
+
+    A copy of the GNU Affero General Public License should be included with this
+    distribution. If not, see <https://www.gnu.org/licenses/>.
+
 # What is GC2?   
 GC2 – an enterprise platform for managing geospatial data, making map visualisations and creating applications. Built on the best open source and standard based software.   
 
