@@ -1,0 +1,52 @@
+<script>window.geocloud_host="http://cowi.mapcentia.com"</script>
+<script src="http://127.0.0.1/apps/widgets/gc2map/js/gc2map.js"></script>
+<script src="http://127.0.0.1/apps/widgets/gc2table/js/gc2table.js"></script>
+<script src="http://127.0.0.1/apps/widgets/gc2map/js/searchModules/danish.js"></script>
+
+<style>
+    #legend-popover-li-map, #open-win-li-map{
+        display:none;
+    }
+    .table > thead > tr > th > div,
+    .table > tbody > tr > td
+    {
+        font-size: 12px !important;
+        line-height: 2 !important;
+        vertical-align: top !important;
+
+
+    }
+
+    #map {
+        height: 600px;
+    }
+
+</style>
+<div>
+    <div style="position:relative" id="map"></div>
+    <div>
+        <table id="table" data-show-toggle="true" data-show-export="true" data-show-columns="true"
+               data-filter-control="true"></table>
+    </div>
+</div>
+
+<script>
+    // Lav en widget på normal vis
+    gc2map.init({
+        key: "map",
+        db: 'jammerbugt',
+        zoom: [9.5354,55.7042,9],
+        layers: [],
+        baseLayers: [{"id": "osm", "name": "osm"},{"id": "geodkBright", "name": "geodkBright"}],
+        setBaseLayer: 'osm',
+        width: '100%',
+        height: '500px',
+        callBack: function (m, w) {
+
+
+
+
+
+        }
+    });
+</script>

@@ -1,0 +1,56 @@
+{
+    "name": "public",
+    "settings": {
+        "cmd": {
+            "license": "commercial",
+            "cmdVersion": "5.0.2.270",
+            "frameworkVersion": "4.2.1.883"
+        },
+        "canvasControls": {
+            "viewportSize": {
+                "name": "Auto Expand",
+                "builtIn": true,
+                "height": null,
+                "width": null
+            }
+        },
+        "urlPrefix": "http://localhost/public/",
+        "exportPath": "",
+        "projectHasEnabledWebServer": false,
+        "spacesToIndent": 4,
+        "sdkPath": "",
+        "lineEnding": "LF",
+        "genTimestamps": false,
+        "cacheBust": false,
+        "buildShouldOverwriteIndex": true,
+        "generateArchitectVersion": true
+    },
+    "xdsVersion": "3.1.0",
+    "xdsBuild": 1943,
+    "schemaVersion": 1,
+    "upgradeVersion": 300000000007,
+    "framework": "ext42",
+    "viewOrderMap": {
+        "view": [
+            "c2311713-9db7-468d-a207-293792b60cbc",
+            "35afd42e-aeac-4380-b0f0-9bcebe016ddb"
+        ],
+        "store": [
+            "ed20249e-3db4-4119-9fc7-d71f142e9358",
+            "d6b9e932-91e0-4469-848a-df7f12caf2f3"
+        ],
+        "controller": [
+            "219c8580-746b-465e-a8f3-5174ccb0e893"
+        ],
+        "model": [
+            "bd2ee9d8-45d5-4989-a423-b21638c35da7",
+            "8cde3751-ecd4-498e-a37f-d281f47e1431"
+        ],
+        "resource": [
+            "64fd95c1-abd1-460e-8e87-acfb51fde2de"
+        ],
+        "app": [
+            "application"
+        ]
+    }
+}

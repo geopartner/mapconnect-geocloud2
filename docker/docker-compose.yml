@@ -1,0 +1,133 @@
+networks:
+  internal:
+    external: false
+
+services:
+  gc2core:
+    image: dev_ecw3
+    privileged: true
+    volumes:
+      - ../../geocloud2:/var/www/geocloud2
+    networks:
+      - default
+      - internal
+    ports:
+      - "8080:80"
+      - "8081:8080"
+    expose:
+      - 9000
+    environment:
+      - POSTGIS_HOST=postgis
+      - POSTGIS_DB=postgres
+      - POSTGIS_USER=gc2
+      - POSTGIS_PORT=6432
+      - POSTGIS_PW=1234
+      - POSTGIS_PGBOUNCER=true
+      - MODE_ENV=${MODE_ENV}
+      - BUILD_ID=${BUILD_ID}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  event:
+    image: mapcentia/event
+    build: ../app/event/.
+    privileged: true
+    volumes:
+      - ../../geocloud2:/var/www/geocloud2
+    networks:
+      - default
+      - internal
+    ports:
+      - "8088:80"
+    expose:
+      - 9000
+    environment:
+      - POSTGIS_HOST=postgis
+      - POSTGIS_DB=postgres
+      - POSTGIS_USER=gc2
+      - POSTGIS_PORT=6432
+      - POSTGIS_PW=1234
+      - POSTGIS_PGBOUNCER=true
+      - MODE_ENV=${MODE_ENV}
+      - BUILD_ID=${BUILD_ID}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+  redis:
+    image: redis
+    networks:
+      - default
+      - internal
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+  memcached:
+    image: memcached
+    networks:
+      - default
+      - internal
+    ports:
+      - "11211:11211"
+  postgis:
+    build: ./postgis
+    image: mapcentia/postgis15
+    volumes:
+      - postgis_var_lib_postgresql:/var/lib/postgresql
+    networks:
+      - default
+      - internal
+    ports:
+      - "5432:5432"
+    environment:
+      - GC2_USER=gc2
+      - GC2_PASSWORD=1234
+      - POSTGIS_HOST=127.0.0.1
+      - POSTGIS_USER=gc2
+      - POSTGIS_PORT=5432
+      - POSTGIS_PW=1234
+      - POSTGIS_DB=postgres
+    healthcheck:
+      test: "psql -U postgres -t -c select || exit 1"
+      interval: 10s
+      timeout: 10s
+      retries: 2
+      start_period: 10s
+
+#  limesurvey:
+#    image: acspri/limesurvey
+#    ports:
+#      - 8082:80
+#    networks:
+#      - default
+#      - internal
+#    environment:
+#      LIMESURVEY_DB_PASSWORD: 1234
+#      LIMESURVEY_DB_USER: gc2
+#      LIMESURVEY_DB_HOST: postgis
+#      LIMESURVEY_DB_NAME: mydb
+#      LIMESURVEY_ADMIN_USER: admin
+#      LIMESURVEY_ADMIN_PASSWORD: password
+#      LIMESURVEY_ADMIN_NAME: Lime Administrator
+#      LIMESURVEY_ADMIN_EMAIL: lime@lime.lime
+#    volumes:
+#      - ./plugins:/var/www/html/plugins
+#      - ./upload:/var/www/html/upload
+#      - ./config:/var/www/html/application/config
+
+#  elasticsearch:
+#    image: elasticsearch:7.17.6
+#    networks:
+#      - default
+#      - internal
+#    ports:
+#      - "9200:9200"
+#    environment:
+#      - "discovery.type=single-node"
+
+volumes:
+  postgis_var_lib_postgresql:
+
+
+
+
+
