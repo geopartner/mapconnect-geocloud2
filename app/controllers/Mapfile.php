@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2021 MapCentia ApS
+ * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -109,7 +110,7 @@ class Mapfile extends Controller
         FORMATOPTION "DUPLICATES=false"
         END
 
-        #CONFIG "MS_ERRORFILE" "/var/www/geocloud2/app/wms/mapfiles/ms_error.txt"
+        #CONFIG "MS_ERRORFILE" "stderr"
         #DEBUG 5
 
         WEB
@@ -336,6 +337,399 @@ class Mapfile extends Controller
         END
         END
 
+        # Start of RSF symbols
+        #---------------------------------------------
+        # Skravering
+        #---------------------------------------------
+        SYMBOL
+            NAME 'skravering'
+            TYPE HATCH
+        END
+        
+        #---------------------------------------------
+        #Linie typer
+        #---------------------------------------------
+        SYMBOL
+        NAME 'punkt'
+        TYPE ELLIPSE
+        POINTS
+            1 1
+        END
+        FILLED TRUE
+        END
+
+        SYMBOL
+        NAME 'Cirkel'
+        TYPE ELLIPSE
+        POINTS
+            1 1
+        END
+        END
+
+        SYMBOL
+            NAME 'Ventil'
+            TYPE VECTOR
+            POINTS
+            0 0
+            0 3
+            5 0
+            5 3
+            0 0
+            END
+        END
+    
+        SYMBOL
+            NAME 'fVentil'
+            TYPE VECTOR
+            POINTS
+            0 0
+            0 3
+            5 0
+            5 3
+            0 0
+            END
+            FILLED TRUE
+        END
+
+        SYMBOL
+            NAME 'Nedløbsrist'
+            TYPE VECTOR
+            POINTS
+            0 0
+            0 3
+            3 3
+            3 0
+            0 0
+            -99 -99
+            1 3
+            1 0
+            -99 -99
+            2 3
+            2 0
+            -99 -99
+            3 3
+            3 0
+            END
+        END
+        
+        SYMBOL
+            NAME 'Firkant_m_kryds'
+            TYPE VECTOR
+            POINTS
+            3 3
+            0 3
+            0 0
+            3 0
+            3 3
+            -99 -99
+            3 3
+            0 0
+            -99 -99
+            0 3
+            3 0
+            END
+        END
+        
+        SYMBOL
+            NAME 'Firkant'
+            TYPE VECTOR
+            POINTS
+            3 3
+            0 3
+            0 0
+            3 0
+            3 3
+            END
+            FILLED TRUE
+        END
+
+        SYMBOL
+            NAME 'Rektangel'
+            TYPE VECTOR
+            POINTS
+            0 0
+            4 0
+            4 2
+            0 2
+            0 0
+            END
+        END
+            
+        SYMBOL
+            NAME 'fRektangel'
+            TYPE VECTOR
+            POINTS
+            0 0
+            4 0
+            4 2
+            0 2
+            0 0
+            END
+            FILLED TRUE
+        END
+
+        SYMBOL
+            NAME 'Rektangelfill'
+            TYPE VECTOR
+            POINTS
+            0 0
+            4 0
+            4 2
+            0 2
+            0 0
+            END
+            FILLED TRUE
+        END
+            
+        SYMBOL
+            NAME 'Kryds'
+            TYPE VECTOR
+            POINTS
+            0 0
+            3 3
+            -99 -99
+            0 3
+            3 0
+            END
+        END
+        
+        SYMBOL
+            NAME 'Kabelmuffe'
+            TYPE VECTOR
+            POINTS
+            0.6 0
+            0 1.5
+            0.6 3
+            1.2 1.5
+            0.6 0
+            END
+            FILLED TRUE		
+        END
+        
+        SYMBOL
+            NAME 'Flowmåler'
+            TYPE VECTOR
+            POINTS
+            0 2
+            0.043705 1.584177
+            0.172909 1.186527
+            0.381966 0.824429
+            0.661739 0.51371
+            1 0.267949
+            1.381966 0.097887
+            1.790943 0.010956
+            2.209057 0.010956
+            2.618034 0.097887
+            3 0.267949
+            3.338261 0.51371
+            3.618034 0.824429
+            3.827091 1.186527
+            3.956295 1.584177
+            4 2
+            3.956295 2.415823
+            3.827091 2.813473
+            3.618034 3.175571
+            3.338261 3.48629
+            3 3.732051
+            2.618034 3.902113
+            2.209057 3.989044
+            1.790943 3.989044
+            1.381966 3.902113
+            1 3.732051
+            0.661739 3.48629
+            0.381966 3.175571
+            0.172909 2.813473
+            0.043705 2.415823
+            0 2
+            -99 -99
+            1.325484 1.929275
+            2.349106 1.929275
+            -99 -99
+            2.762491 3.149747
+            1.325484 3.149747
+            1.325484 0.649747
+            END
+        END
+        
+        SYMBOL
+            NAME 'Reduktion'
+            TYPE VECTOR
+            POINTS
+            0 0
+            0 2
+            3 1
+            0 0
+            END
+        END
+        
+        SYMBOL
+            NAME 'Slutmuffe'
+            TYPE VECTOR
+            POINTS
+            0 4
+            1 4
+            1 0
+            0 0
+            END
+        END
+        
+        SYMBOL
+            NAME 'Målerbrønd'
+            TYPE VECTOR
+            POINTS
+            3 3
+            0 3
+            0 0
+            3 0
+            3 3
+            -99 -99
+            0.75 0.5
+            0.75 2.5
+            1.5 0.5
+            2.25 2.5
+            2.25 0.5
+            END
+        END
+        
+        SYMBOL
+            NAME 'Borerapporter'
+            TYPE VECTOR
+            POINTS
+            0.6 0
+            0.5 0.8
+            0 0.8
+            0 1
+            0.2 1.2
+            0.3 1.3
+            0.2 2.2
+            0 2.4
+            0 2.6
+            1.2 2.6
+            1.2 2.4
+            1 2.2
+            0.9 1.3
+            1 1.2
+            1.2 1
+            1.2 0.8
+            0.7 0.8
+            0.6 0
+            END
+                FILLED TRUE
+        END
+
+            SYMBOL
+            NAME 'TrekantFill'
+            TYPE VECTOR
+            POINTS
+            0 0
+            4 0
+            2 3
+            0 0
+            END
+                FILLED TRUE
+        END
+
+            SYMBOL
+            NAME 'Trekant'
+            TYPE VECTOR
+            POINTS
+            0 0
+            4 0
+            2 3
+            0 0
+            END
+        END
+            
+        SYMBOL
+            NAME 'Maalepkt'
+            TYPE VECTOR
+            POINTS
+            2 4
+            2 0
+            -99 -99
+            4 2
+            0 2
+            -99 -99
+            1.8 2
+            1.8 0.010025
+            -99 -99
+            1.6 2
+            1.6 0.040408
+            -99 -99
+            1.4 2
+            1.4 0.092122
+            -99 -99
+            1.2 2
+            1.2 0.16697
+            -99 -99
+            1 2
+            1 0.267949
+            -99 -99
+            0.8 2
+            0.8 0.4
+            -99 -99
+            0.6 2
+            0.6 0.571714
+            -99 -99
+            0.4 2
+            0.4 0.8
+            -99 -99
+            0.2 2
+            0.2 1.12822
+            -99 -99
+            2.2 2
+            2.2 3.989975
+            -99 -99
+            2.4 2
+            2.4 3.959592
+            -99 -99
+            2.6 2
+            2.6 3.907878
+            -99 -99
+            2.8 2
+            2.8 3.83303
+            -99 -99
+            3 2
+            3 3.732051
+            -99 -99
+            3.2 2
+            3.2 3.6
+            -99 -99
+            3.4 2
+            3.4 3.428286
+            -99 -99
+            3.6 2
+            3.6 3.2
+            -99 -99
+            3.8 2
+            3.8 2.87178
+            END
+        END
+            
+        SYMBOL
+            NAME 'rottespaer'
+            TYPE VECTOR
+            POINTS
+            -0 2.36
+            7.09 2.36
+            -99 -99
+            -0 1.18
+            7.09 1.18
+            -99 -99
+            -0 3.54
+            7.09 3.54
+            -99 -99
+            7.09 3.54
+            7.09 0
+            -99 -99
+            7.09 0
+            -0 0
+            -99 -99
+            -0 0
+            -0 3.54
+            END
+        END
+        # End of RSF symbols
 
         #
         # Start of layers
@@ -493,7 +887,7 @@ class Mapfile extends Controller
                         echo "DATA \"" . strtolower($row['f_geometry_column']) . " FROM (SELECT \\\"$selectStr\\\" FROM ($dataSql /*FILTER_$layerName*/) as bar) as foo USING UNIQUE {$primeryKey['attname']} USING srid={$row['srid']}\"\n";
                         ?>
                         CONNECTIONTYPE POSTGIS
-                        CONNECTION "user=<?php echo Connection::$param['postgisuser']; ?> dbname=<?php echo Connection::$param['postgisdb']; ?><?php if (Connection::$param['postgishost']) echo " host=" . (!empty(Connection::$param['mapserverhost']) ? Connection::$param['mapserverhost'] : Connection::$param['postgishost']); ?><?php echo " port=" . ((!empty(Connection::$param['mapserverport']) ? Connection::$param['mapserverport'] : Connection::$param['postgisport']) ?: "5432") ?><?php if (Connection::$param['postgispw']) echo " password=" . Connection::$param['postgispw']; ?><?php if (!Connection::$param['pgbouncer']) echo " options='-c client_encoding=UTF8'" ?>"
+                        CONNECTION "user=<?php echo Connection::$param['postgisuser']; ?> dbname=<?php echo Connection::$param['postgisdb']; ?><?php if (Connection::$param['postgishost']) echo " host=" . (!empty(Connection::$param['mapserverhost']) ? Connection::$param['mapserverhost'] : Connection::$param['postgishost']); ?><?php echo " port=" . ((!empty(Connection::$param['mapserverport']) ? Connection::$param['mapserverport'] : Connection::$param['postgisport']) ?: "5432") ?><?php if (Connection::$param['postgispw']) echo " password=" . Connection::$param['postgispw']; ?><?php if (!Connection::$param['pgbouncer']) echo " options='-c client_encoding=UTF8'" ?> <?php //echo " options='-c set server role to replica'" ?>"
                         <?php if (!empty($layerArr['data'][0]['label_no_clip'])) echo "PROCESSING \"LABEL_NO_CLIP=True\"\n"; ?>
                         <?php if (!empty($layerArr['data'][0]['polyline_no_clip'])) echo "PROCESSING \"POLYLINE_NO_CLIP=True\"\n"; ?>
 
