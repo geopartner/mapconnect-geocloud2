@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -59,7 +60,8 @@ final class BasicAuth
         // AUTHENTICATION SUCCESSFUL
         $schema = explode('.', $layerName)[0];
         if ($this->isSubuser && $this->user != $schema) {
-            $sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_ LIKE :schema";
+            // This query is abyssmally slow if _view is used, so we use the _join instead
+            $sql = "SELECT * FROM settings.geometry_columns_join WHERE _key_ LIKE :schema";
             $postgisObject = new Model();
             $res = $postgisObject->prepare($sql);
             try {

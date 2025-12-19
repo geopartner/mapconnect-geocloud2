@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -169,7 +170,7 @@ $handler = static function () {
     } elseif (isset(App::$param["AccessControlAllowOrigin"]) && App::$param["AccessControlAllowOrigin"][0] == "*") {
         header("Access-Control-Allow-Origin: *");
     }
-    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control");
+    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control, GC2-API-KEY");
     header("Access-Control-Allow-Credentials: true");
     header("Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS");
 

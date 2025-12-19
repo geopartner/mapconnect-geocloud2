@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2019 MapCentia ApS
+ * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -58,8 +59,8 @@ class Mapcachefile extends Controller
         <mapcache>
 
             <locker type="disk">
-                <directory>/tmp</directory>
-                <timeout>30</timeout>
+                <directory><?php echo App::$param['path'] . "app/wms/mapcache/lock"; ?></directory>
+                <timeout>10</timeout>
                 <retry>0.6</retry>
             </locker>
 
