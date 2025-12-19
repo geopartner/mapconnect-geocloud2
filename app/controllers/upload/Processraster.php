@@ -8,6 +8,7 @@
  * @package    app\controllers
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2018 MapCentia ApS
+ * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  * @since      File available since Release 2013.1
  *
@@ -57,9 +58,11 @@ class Processraster extends Controller
             " -U " .
             Connection::$param["postgisuser"] .
             " -h " .
-            Connection::$param["postgishost"] .
+            //Connection::$param["postgishost"] .
+            "pgbouncer" .
             " -p " .
-            Connection::$param["postgisport"];
+            //Connection::$param["postgisport"];
+            "5432";
 
         exec($cmd . ' 2>&1', $out);
         $err = false;
