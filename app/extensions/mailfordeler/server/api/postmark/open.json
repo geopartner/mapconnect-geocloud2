@@ -1,0 +1,36 @@
+{
+  "RecordType": "Open",
+  "MessageStream": "outbound",
+  "Metadata": {
+    "example": "value",
+    "example_2": "value"
+  },
+  "FirstOpen": true,
+  "Recipient": "john@example.com",
+  "MessageID": "00000000-0000-0000-0000-000000000000",
+  "ReceivedAt": "2025-05-04T03:07:19Z",
+  "Platform": "WebMail",
+  "ReadSeconds": 5,
+  "Tag": "welcome-email",
+  "UserAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_7_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.153 Safari/537.36",
+  "OS": {
+    "Name": "OS X 10.7 Lion",
+    "Family": "OS X 10",
+    "Company": "Apple Computer, Inc."
+  },
+  "Client": {
+    "Name": "Chrome 35.0.1916.153",
+    "Family": "Chrome",
+    "Company": "Google"
+  },
+  "Geo": {
+    "IP": "188.2.95.4",
+    "City": "Novi Sad",
+    "Country": "Serbia",
+    "CountryISOCode": "RS",
+    "Region": "Autonomna Pokrajina Vojvodina",
+    "RegionISOCode": "VO",
+    "Zip": "21000",
+    "Coords": "45.2517,19.8369"
+  }
+}

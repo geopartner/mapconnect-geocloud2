@@ -49,7 +49,8 @@ var form, store, writeFiles, writeMapCacheFile, clearTileCache, updateLegend, ac
     extentRestricted = false, spinner, styleWizardWin, workflowStore, workflowStoreLoaded = false,
     subUserGroups = {},
     dataStore, dataGrid, tableDataLoaded = false, dataPanel, esPanel, esGrid,
-    enableWorkflow = (window.gc2Options.enableWorkflow !== null && typeof window.gc2Options.enableWorkflow[parentdb] !== "undefined" && window.gc2Options.enableWorkflow[parentdb] === true) || (window.gc2Options.enableWorkflow !== null && typeof window.gc2Options.enableWorkflow["*"] !== "undefined" && window.gc2Options.enableWorkflow["*"] === true);
+    enableWorkflow = (window.gc2Options.enableWorkflow !== null && typeof window.gc2Options.enableWorkflow[parentdb] !== "undefined" && window.gc2Options.enableWorkflow[parentdb] === true) || (window.gc2Options.enableWorkflow !== null && typeof window.gc2Options.enableWorkflow["*"] !== "undefined" && window.gc2Options.enableWorkflow["*"] === true),
+    enableMailfordeler = (window.gc2Options.enableMailfordeler !== null && typeof window.gc2Options.enableMailfordeler[parentdb] !== "undefined" && window.gc2Options.enableMailfordeler[parentdb] === true) || (window.gc2Options.enableMailfordeler !== null && typeof window.gc2Options.enableMailfordeler["*"] !== "undefined" && window.gc2Options.enableMailfordeler["*"] === true);
 
 var cloud, gc2, layer, grid, featureStore, map, viewport, drawControl, gridPanel, modifyControl, tree,
     viewerSettings,
@@ -4347,6 +4348,25 @@ $(document).ready(function () {
             {
                 xtype: "panel",
                 title:
+                    '<i class="fa fa-envelope"></i> ' + __('Mailfordeler'),
+                layout:
+                    'border',
+                id:
+                    "mailfordelerPanel",
+                items:
+                    [
+                        {
+                            frame: false,
+                            border: false,
+                            region: "center",
+                            html: '<iframe frameborder="0" id="mailfordeler" style="width:100%;height:100%" src="/mailfordeler/index.html"></iframe>'
+                        }
+                    ]
+            }
+            ,
+            {
+                xtype: "panel",
+                title:
                     '<i class="fa fa-list"></i> ' + __('Log'),
                 layout:
                     'border',
@@ -4595,6 +4615,13 @@ $(document).ready(function () {
      */
     if (!enableWorkflow) {
         tabs.hideTabStripItem(Ext.getCmp('workflowPanel'));
+    }
+
+    /**
+     * Hide tab if mailfordeler is not available for the db
+     */
+    if (!enableMailfordeler) {
+        tabs.hideTabStripItem(Ext.getCmp('mailfordelerPanel'));
     }
 
 

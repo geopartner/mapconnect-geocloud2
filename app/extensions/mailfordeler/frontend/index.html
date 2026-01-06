@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Website</title>
+    <script src="https://cdn.jsdelivr.net/npm/handlebars@latest/dist/handlebars.js"></script>
+    <link rel="stylesheet" href="css/bulma.min.css">
+    <link rel="stylesheet" href="css/bulma-steps.css">
+    <link rel="stylesheet" href="css/bulma-list.css">
+    <script defer src="https://use.fontawesome.com/releases/v5.3.1/js/all.js"></script>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+    <div class="columns is-fullheight outlined">
+        <div class="column is-narrow" style="width: 250px;">
+            <button class="button">Hjem</button>
+            <button class="button js-modal-trigger" data-target="modal-add-wizard">Tilføj</button>
+            <hr>
+            <div id="table-pane">
+                content
+            </div>
+        </div>
+        <div class="column" id="main-pane">
+            Main content goes here.
+        </div>
+    </div>
+    <!-- Modal -->
+    <div id="modal" class="modal">
+        <div class="modal-background"></div>
+
+        <div class="modal-content">
+            <div class="box">
+                <p>Modal JS example</p>
+                test
+            </div>
+        </div>
+
+        <button class="modal-close is-large" aria-label="close"></button>
+    </div>
+    <!-- Modal - Add -->
+    <div id="modal-add-wizard" class="modal">
+    </div>
+    <script src="js/main.js" type="module"></script>
+</body>
+
+<!-- https://bulma.io/documentation/ -->
+
+</html>

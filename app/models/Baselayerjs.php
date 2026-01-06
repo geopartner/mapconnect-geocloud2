@@ -74,7 +74,10 @@ class Baselayerjs extends Controller
             $gridNames[] = $k;
         }
 
-        $settingsRawJSON .= "\"grids\": " . (json_encode($gridNames) ?: "null") . "\n";
+        $settingsRawJSON .= "\"grids\": " . (json_encode($gridNames) ?: "null") . ",\n";
+
+        // Add settings from Geopartner
+        $settingsRawJSON .= "\"enableMailfordeler\": " . (!empty(App::$param['enableMailfordeler']) ? json_encode(App::$param['enableMailfordeler']) : "null") . "\n";
 
         $settingsRawJSON .= "}";
 
