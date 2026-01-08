@@ -60,3 +60,4 @@ public/apps/widgets/gc2map/js
 public/api
 admin.php
 /public/dashboard
+/dashboard/build
