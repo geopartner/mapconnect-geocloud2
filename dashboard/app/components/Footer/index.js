@@ -2,15 +2,10 @@ import React from 'react';
 import styled from 'styled-components';
 
 const StyledFooter = styled.div`
-    position: fixed;
-    bottom: 0;
-    left: 0;
     width: 100%;
     text-align: center;
     padding: 15px 0;
-    background-color: rgba(242, 242, 242, 0.9);
-    border-top: 1px solid #ddd;
-    z-index: 1000;
+    font-size: 12px;
     
     a {
         color: inherit;
