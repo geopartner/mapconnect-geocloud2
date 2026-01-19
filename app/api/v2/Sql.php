@@ -170,10 +170,24 @@ class Sql extends Controller
             $this->data = $serializedResponse;
         }
         $response = unserialize($this->data);
-        if (!empty($this->cacheInfo)) {
-            $response["cache"] = $this->cacheInfo;
+        
+        // For CSV/Excel formats, the sql() method outputs directly and returns empty array
+        // Exit immediately to prevent Route layer from appending JSON metadata
+        $format = strtolower(Input::get('format') ?: 'geojson');
+        if (in_array($format, ['csv', 'excel']) && empty($response)) {
+            exit();
         }
-        $response["_peak_memory_usage"] = round(memory_get_peak_usage() / 1024) . " KB";
+        
+        // Only add metadata for JSON-based formats
+        $jsonFormats = ['json', 'geojson', 'jsonp'];
+        
+        if (in_array($format, $jsonFormats)) {
+            if (!empty($this->cacheInfo)) {
+                $response["cache"] = $this->cacheInfo;
+            }
+            $response["_peak_memory_usage"] = round(memory_get_peak_usage() / 1024) . " KB";
+        }
+
         return $response;
     }
 
