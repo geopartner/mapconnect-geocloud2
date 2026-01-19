@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
+## [unreleased]
+
+### Fixed
+- Fixed and issue with `api/v2/sql`. When a request was made with `format` or the likes, an metadata-object was appended to the end of said format, rendering it unreadable. most notibly excel. The object is now only available in the following formats: `json`, `geojson` (which is the default) and `jsonp`.
+
+
 ## [2025.9.0] - 2025-16-9
 ### Fixed
 - Rename `redirect_url` to `redirect_uri` in Signup/Signout API for consistency.
