@@ -32,6 +32,8 @@ public/js/leaflet1.0.2
 !app/conf/mapcache/sources/.gitignore
 !app/conf/mapcache/tilesets
 !app/conf/mapcache/tilesets/.gitignore
+!app/conf/grids
+!app/conf/grids/.gitignore
 
 
 .idea/
@@ -59,5 +61,19 @@ public/apps/widgets/gc2map/css
 public/apps/widgets/gc2map/js
 public/api
 admin.php
-/public/dashboard
-/dashboard/build
+supervisord.log
+supervisord.pid
+skipcache
+public/js/admin/build
+public/css/build
+public/assets/images/Geopartner_500.png
+public/js/leaflet/cartodb-all.js
+public/js/leaflet/leaflet-all.js
+public/js/leaflet/leaflet-plugins-all.js
+public/dashboard
+dashboard/build
+.vscode/
+app/conf/
+app/conf/Geopartner_500.png
+public/apps/widgets/gc2map/js/gc2map.js
+app/wms/fonts/fonts.txt
