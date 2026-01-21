@@ -75,6 +75,11 @@ class ProtectedLayout extends React.Component {
                                             {helpButton}
                                         </div>
                                         <div style={{display: `inline-block`}}>
+                                            <Button color="inherit" onClick={() => this.props.history.push(prefix + "sign-in")}>
+                                                <FormattedMessage id="Change database"/>
+                                            </Button>
+                                        </div>
+                                        <div style={{display: `inline-block`}}>
                                             <Button color="inherit" onClick={this.props.onSignOut}>
                                                 <FormattedMessage id="Sign out"/>
                                             </Button>
@@ -125,6 +130,7 @@ const mapStateToProps = createStructuredSelector({
 export function mapDispatchToProps(dispatch) {
     return {
         onSignOut: () => dispatch(signOut()),
+        onChangeDatabase: () => dispatch(changeDatabase())
     };
 }
 
