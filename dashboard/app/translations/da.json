@@ -89,9 +89,18 @@
     "containers.SigninPage.invalidCredentialsWereProvided": "Ugyldige brugeroplysninger blev leveret",
     "containers.SigninPage.register": "Tilmeld",
     "containers.SigninPage.invalidUsernameOrPassword": "Ugyldig brugernavn eller adgangskode",
-    
-    "containers.SignupPage.signIn": "Log ind",
-
+    "Processing login, please wait...": "Behandler login, vent venligst...",
+    "Start the login process": "Start login processen. Hvis din konto tillader flere databaser, vil du blive spurgt om at vælge en under login-prosessen.",
+    "Current selection": "Nuværende valg: {db} {superuser}",
+    "No database selected yet": "Ingen database valgt endnu",
+    "Select a database": "Vælg en database",
+    "Superuser": "Admin",
+    "No databases found": "Ingen databaser fundet",
+    "Continue": "Forsæt",
+    "Cancel": "Fortryd",
+    "Login": "Login",
+    "Reset selected database": "Nulstil valgt database",
+    "Database reset message": "Database og superbruger valg er blevet nulstillet. Du vil blive spurgt om at vælge ved næste login.",
     "checkingAuthorizationStatus": "Kontrollerer godkendelsesstatus",
     "Database creation is disabled": "Database oprettelse er slået fra",
     "Close": "Luk"

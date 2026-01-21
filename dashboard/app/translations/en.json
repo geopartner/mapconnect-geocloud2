@@ -89,9 +89,18 @@
     "containers.SigninPage.invalidCredentialsWereProvided": "Invalid credentials were provided",
     "containers.SigninPage.register": "Register",
     "containers.SigninPage.invalidUsernameOrPassword": "Invalid username or password",
-    
-    "containers.SignupPage.signIn": "Sign in",
-
+    "Processing login, please wait...": "Processing login, please wait...",
+    "Start the login process": "Start the login process. If your account allows multiple databases, you will be asked to choose one during the login process.",
+    "Current selection": "Current selection: {db} {superuser}",
+    "No database selected yet": "No database selected yet",
+    "Select a database": "Select a database",
+    "Superuser": "Admin",
+    "No databases found": "No databases found",
+    "Continue": "Continue",
+    "Cancel": "Cancel",
+    "Login": "Login",
+    "Reset selected database": "Reset selected database",
+    "Database reset message": "Database and superuser selection have been reset. You will be asked to choose on next sign-in.",
     "checkingAuthorizationStatus": "Checking authorization status",
     "Database creation is disabled": "Database creation is disabled",
     "Close": "Close"
