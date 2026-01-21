@@ -45,7 +45,9 @@ class ProtectedLayout extends React.Component {
                 </StyledButtonLink>);
 
                 let helpButton = (
-                    <HelpModal/>
+                    <Button color="inherit" onClick={() => window.open('https://dokumentation.geopartner.dk', '_blank')}>
+                        <HelpIcon style={{marginRight: `6px`}}/>
+                    </Button>
                 );
 
                 if (this.props.user.passwordExpired) {
