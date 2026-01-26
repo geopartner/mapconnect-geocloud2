@@ -202,7 +202,7 @@ module.exports = function (grunt) {
         cacheBust: {
             taskName: {
                 options: {
-                    assets: ['js/admin/build/*', 'api/v1/js/*', 'api/v3/js/*', 'css/build/*', '/js/OpenLayers-2.12/OpenLayers.gc2.js'],
+                    assets: ['js/admin/build/all.min.js', 'api/v1/js/api.js', 'api/v3/js/geocloud.js', 'css/build/styles.min.css', 'apps/viewer/js/build/all.min.js', 'apps/viewer/css/build/all.min.css', 'apps/widgets/gc2map/js/build/all.min.js', 'apps/widgets/gc2map/css/build/all.min.css', 'js/OpenLayers-2.12/OpenLayers.gc2.js'],
                     encoding: 'utf8',
                     algorithm: 'md5',
                     length: 16,
