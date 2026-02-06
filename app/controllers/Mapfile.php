@@ -1951,6 +1951,12 @@ class Mapfile extends Controller
 //                    print_r($classArr['data']);
 //                    die();
                     foreach ($classArr['data'] as $class) {
+
+                        // Ignore clustered layers because expression does not exit in database - and fails.
+                        if (!empty($class['expression']) && strpos($class['expression'], "[Cluster_FeatureCount]") !== false) {
+                            continue;
+                        }
+
                         ?>
                         CLASS
                         #NAME
