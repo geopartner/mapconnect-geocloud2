@@ -244,7 +244,7 @@ class Layer extends Table
                 $restrictions = [];
                 foreach ($row as $key => $value) {
                     // Set empty strings to NULL
-                    $value = $value == "" ? null : $value;
+                    $value = $value === "" ? null : $value;
                     if ($key == "type" && $value == "GEOMETRY") {
                         $def = isset($row['def']) ? json_decode($row['def'], true) : [];
                         if (isset($def['geotype']) && $def['geotype'] != "Default") {
