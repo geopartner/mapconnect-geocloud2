@@ -7,6 +7,9 @@ and this project adheres to [CalVer](https://calver.org/).
 
 ## [Additions]
 
+### Added
+- WFS now supports GeoJSON as output format.
+
 ### Fixed
 - Fixed and issue with `api/v2/sql`. When a request was made with `format` or the likes, an metadata-object was appended to the end of said format, rendering it unreadable. most notibly excel. The object is now only available in the following formats: `json`, `geojson` (which is the default) and `jsonp`.
 - Fixed an issue where WFS would fail when the layer was clustered. Requires new mapfile generation.
