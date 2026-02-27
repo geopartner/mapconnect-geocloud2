@@ -202,7 +202,7 @@ module.exports = function (grunt) {
         cacheBust: {
             taskName: {
                 options: {
-                    assets: ['js/admin/build/*', 'api/v1/js/*', 'api/v3/js/*', 'css/build/*', '/js/OpenLayers-2.12/OpenLayers.gc2.js'],
+                    assets: ['js/admin/build/all.min.js', 'api/v1/js/api.js', 'api/v3/js/geocloud.js', 'css/build/styles.min.css', 'apps/viewer/js/build/all.min.js', 'apps/viewer/css/build/all.min.css', 'apps/widgets/gc2map/js/build/all.min.js', 'apps/widgets/gc2map/css/build/all.min.css', 'js/OpenLayers-2.12/OpenLayers.gc2.js'],
                     encoding: 'utf8',
                     algorithm: 'md5',
                     length: 16,
@@ -270,7 +270,7 @@ module.exports = function (grunt) {
                 command: 'chown www-data:www-data -R /var/www/geocloud2/app/wms/files'
             },
             composer: {
-                command: 'cd app && php composer.phar install'
+                command: 'cd app && php -d xdebug.mode=off composer.phar install --no-interaction'
             },
             hacks: {
                 command: 'cp ./docker/_hacks/pool/* ./app/vendor/phpfastcache/phpfastcache/lib/Phpfastcache/Core/Pool/ && cp ./docker/_hacks/proxy/* ./app/vendor/phpfastcache/phpfastcache/lib/Phpfastcache/Proxy/ && cp ./docker/_hacks/drivers/redis/* ./app/vendor/phpfastcache/phpfastcache/lib/Phpfastcache/Drivers/Redis/Driver.php && cp ./docker/_hacks/drivers/rediscluster/* ./app/vendor/phpfastcache/phpfastcache/lib/Phpfastcache/Drivers/Rediscluster/Driver.php'

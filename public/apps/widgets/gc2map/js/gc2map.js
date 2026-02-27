@@ -34,11 +34,7 @@ if (typeof gc2map === "undefined") {
         (function pollForjQuery() {
             if (typeof $ !== "undefined") {
                 $.getScript(host + "/api/v1/baselayerjs");
-                $.getScript(host + "/js/leaflet/leaflet-all.js#grunt-cache-bust");
-                $.getScript(host + "/js/openlayers/proj4js-combined.js");
-                $.getScript(host + "/js/bootstrap3/js/bootstrap.min.js");
-                $.getScript(host + "/js/hogan/hogan-2.0.0.js");
-                $.getScript(host + "/apps/widgets/gc2map/js/bootstrap-alert.js");
+                $.getScript(host + "/apps/widgets/gc2map/js/build/all.min.js#grunt-cache-bust");
                 (function pollForDependencies() {
                     if (typeof L !== "undefined" &&
                         typeof Proj4js !== "undefined" &&
@@ -46,9 +42,6 @@ if (typeof gc2map === "undefined") {
                         typeof Hogan !== "undefined" &&
                         typeof window.setBaseLayers !== "undefined"
                     ) {
-                        $.getScript(host + "/api/v3/js/geocloud.js?a439ffa6e8bc2dd0#grunt-cache-bust");
-                        $.getScript(host + "/apps/widgets/gc2map/js/main.js?a431ad6b702c34a3#grunt-cache-bust");
-                        $.getScript(host + "/apps/widgets/gc2map/js/templates.js?d65e510c44da571d#grunt-cache-bust");
                         L.Icon.Default.imagePath = host + "/js/leaflet/images";
                         (function pollForDependants() {
                             if (typeof geocloud !== "undefined" && typeof MapCentia !== "undefined" && (typeof this !== "undefined" && typeof this.Templates !== "undefined")) {
@@ -62,21 +55,13 @@ if (typeof gc2map === "undefined") {
                     }
                 }());
 
+
                 $('<link/>').attr({
                     rel: 'stylesheet',
                     type: 'text/css',
-                    href: host + '/apps/widgets/gc2map/css/styles.css?fe15deedc44b317d#grunt-cache-bust'
+                    href: host + '/apps/widgets/gc2map/css/build/all.min.cefa1aedf2d25d39.css?fe15deedc44b317d#grunt-cache-bust'
                 }).appendTo('head');
-                $('<link/>').attr({
-                    rel: 'stylesheet',
-                    type: 'text/css',
-                    href: host + '/js/leaflet/plugins/markercluster/MarkerCluster.css?fe15deedc44b317d#grunt-cache-bust'
-                }).appendTo('head');
-                $('<link/>').attr({
-                    rel: 'stylesheet',
-                    type: 'text/css',
-                    href: host + '/js/leaflet/plugins/markercluster/MarkerCluster.Default.css?fe15deedc44b317d#grunt-cache-bust'
-                }).appendTo('head');
+
                 $('<link/>').attr({
                     rel: 'stylesheet',
                     type: 'text/css',

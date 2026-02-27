@@ -3742,7 +3742,7 @@
 }
 .gc2map .fixed-table-pagination .pagination a {
   padding: 6px 12px;
-  line-height: 1.428571429;
+  line-height: 1.42857143;
 }
 .gc2map .fixed-table-pagination .pagination-info {
   line-height: 34px;
@@ -3770,7 +3770,7 @@
   padding: 3px 20px;
   clear: both;
   font-weight: normal;
-  line-height: 1.428571429;
+  line-height: 1.42857143;
 }
 .gc2map .fixed-table-toolbar .bs-bars,
 .gc2map .fixed-table-toolbar .search,
