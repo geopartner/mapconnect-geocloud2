@@ -5,10 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
-## [unreleased]
+## [Additions]
 
 ### Fixed
 - Fixed and issue with `api/v2/sql`. When a request was made with `format` or the likes, an metadata-object was appended to the end of said format, rendering it unreadable. most notibly excel. The object is now only available in the following formats: `json`, `geojson` (which is the default) and `jsonp`.
+- Fixed an issue where WFS would fail when the layer was clustered. Requires new mapfile generation.
+- Fixed an issue with precision on WFS when using 4326.
+- Fixed an issue in the metadata, where `false` values were translated to `null`
 
 
 ## [2025.9.0] - 2025-16-9
