@@ -269,7 +269,7 @@ class OpenId extends Component {
     render() {
         const {savedDb, info, superuserLogin, processing} = this.state
         const containerStyle = {
-            maxWidth: 420,
+            width: 420,
             margin: '60px auto',
             padding: 24,
             borderRadius: 12,
