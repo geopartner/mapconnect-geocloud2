@@ -125,6 +125,7 @@ class Mapfile extends Controller
         "wms_enable_request" "*"
         "ows_encoding" "UTF-8"
         "wms_extent" "<?php echo implode(" ", $extent) ?>"
+        "wms_allow_getmap_without_styles" "true"
         END
         END
 
@@ -870,8 +871,8 @@ class Mapfile extends Controller
                         $includeItemsStr = "all";
                         uksort($meta, function ($a, $b) use ($fieldConf) {
                             if (isset($fieldConf[$a]) && isset($fieldConf[$b])) {
-                                $sortIdA = $fieldConf[$a]['sort_id'];
-                                $sortIdB = $fieldConf[$b]['sort_id'];
+                                $sortIdA = (int)$fieldConf[$a]['sort_id'];
+                                $sortIdB = (int)$fieldConf[$b]['sort_id'];
                                 return $sortIdA - $sortIdB;
                             }
                             return 0;
@@ -1746,15 +1747,6 @@ class Mapfile extends Controller
         END
 
         OUTPUTFORMAT
-        NAME "utfgrid"
-        DRIVER UTFGRID
-        MIMETYPE "application/json"
-        EXTENSION "json"
-        FORMATOPTION "UTFRESOLUTION=4"
-        FORMATOPTION "DUPLICATES=false"
-        END
-
-        OUTPUTFORMAT
         NAME kml
         DRIVER "OGR/KML"
         MIMETYPE "application/vnd.google-earth.kml+xml"
@@ -1912,8 +1904,8 @@ class Mapfile extends Controller
                 $includeItemsStr = "all";
                 uksort($meta, function ($a, $b) use ($fieldConf) {
                     if (isset($fieldConf[$a]) && isset($fieldConf[$b])) {
-                        $sortIdA = $fieldConf[$a]['sort_id'];
-                        $sortIdB = $fieldConf[$b]['sort_id'];
+                        $sortIdA = (int)$fieldConf[$a]['sort_id'];
+                        $sortIdB = (int)$fieldConf[$b]['sort_id'];
                         return $sortIdA - $sortIdB;
                     }
                     return 0;

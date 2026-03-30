@@ -28,7 +28,10 @@ class Route2
     /**
      * @var array
      */
-    static array $params;
+    public array $params;
+    public bool $isMatched = false;
+    public ?array $jwt;
+    public ?string $action;
 
     /**
      * @param string $uri
@@ -36,10 +39,10 @@ class Route2
      * @param Closure|null $func
      * @throws GC2Exception
      */
-    static public function add(string $uri, ApiInterface $controller, ?Closure $func = null): void
+    public function add(string $uri, ApiInterface $controller, ?Closure $func = null): void
     {
-        if (headers_sent()) {
-            goto end;
+        if ($this->isMatched) {
+            return;
         }
         $signatureMatch = true;
         $e = [];
@@ -69,9 +72,7 @@ class Route2
                     }
                 } else if ($routeSignature[$i][0] == '(' && $routeSignature[$i][strlen($routeSignature[$i]) - 1] == ')') {
                     if (isset($requestSignature[$i])) {
-                        $action = Input::getMethod() . "_" . trim($requestSignature[$i], "()");
-                    } else {
-                        $signatureMatch = false;
+                        $action = trim($requestSignature[$i], "()");
                     }
                 } else if (isset($requestSignature[$i]) && $requestSignature[$i] == $routeSignature[$i]) {
                     $e[] = $requestSignature[$i];
@@ -87,7 +88,9 @@ class Route2
         }
 
         if ($signatureMatch) {
-            self::$params = $r;
+            $this->isMatched = true;
+            $this->params = $r;
+            $this->action = $action;
             if ($func) {
                 $func($r);
             }
@@ -95,54 +98,55 @@ class Route2
 
             $reflectionClass = new ReflectionClass($controller);
             $reflectionMethods = $reflectionClass->getMethods(ReflectionMethod::IS_PUBLIC);
-
+            $method = Input::getMethod();
+            $action = $method . "_" . $action;
             if (!method_exists($controller, $action)) {
-                $method = Input::getMethod();
-                $contentType = Input::getContentType() ? trim(explode(';', Input::getContentType())[0]) : "application/json";
-                $accepts = Input::getAccept() ? array_map(fn($str) => trim(explode(';', $str)[0]), explode(',', Input::getAccept())) : ["*/*"];
-                $action = $method . "_index";
-                $attributes = $reflectionClass->getAttributes(AcceptableMethods::class);
-                foreach ($attributes as $attribute) {
-                    $listener = $attribute->newInstance();
-                    $listener->setHeaders();
-                    if ($listener::class == AcceptableMethods::class) {
-                        $allowedMethods = array_map('strtolower', $listener->getAllowedMethods());
-                        if (!in_array($method, $allowedMethods)) {
-                            $listener->throwException();
-                        }
-                        if ($method == "options" || $method == "head") {
-                            if ($method == "options") {
-                                $m = Input::getAccessControlRequestMethod();
-                                $m = $m ? strtolower($m) : null;
-                                if (!in_array($m, $allowedMethods)) {
-                                    $listener->throwException();
-                                }
+                $this->isMatched = false;
+                return;
+            }
+            $contentType = Input::getContentType() ? trim(explode(';', Input::getContentType())[0]) : "application/json";
+            $accepts = Input::getAccept() ? array_map(fn($str) => trim(explode(';', $str)[0]), explode(',', Input::getAccept())) : ["*/*"];
+            $attributes = $reflectionClass->getAttributes(AcceptableMethods::class);
+            foreach ($attributes as $attribute) {
+                $listener = $attribute->newInstance();
+                $listener->setHeaders();
+                if ($listener::class == AcceptableMethods::class) {
+                    $allowedMethods = array_map('strtolower', $listener->getAllowedMethods());
+                    if (!in_array($method, $allowedMethods)) {
+                        $listener->throwException();
+                    }
+                    if ($method == "options" || $method == "head") {
+                        if ($method == "options") {
+                            $m = Input::getAccessControlRequestMethod();
+                            $m = $m ? strtolower($m) : null;
+                            if (!in_array($m, $allowedMethods)) {
+                                $listener->throwException();
                             }
-                            $listener->options();
-                            goto end;
                         }
+                        $listener->options();
+                        return;
                     }
                 }
-                foreach ($reflectionMethods as $reflectionMethod) {
-                    if ($reflectionMethod->getName() == $action) {
-                        $attributes = $reflectionMethod->getAttributes(AcceptableContentTypes::class);
-                        foreach ($attributes as $attribute) {
-                            $listener = $attribute->newInstance();
-                            if ($listener::class == AcceptableContentTypes::class) {
-                                $allowedContentTypes = array_map('strtolower', $listener->getAllowedContentTypes());
-                                if (!in_array($contentType, $allowedContentTypes)) {
-                                    $listener->throwException($contentType);
-                                }
+            }
+            foreach ($reflectionMethods as $reflectionMethod) {
+                if ($reflectionMethod->getName() == $action) {
+                    $attributes = $reflectionMethod->getAttributes(AcceptableContentTypes::class);
+                    foreach ($attributes as $attribute) {
+                        $listener = $attribute->newInstance();
+                        if ($listener::class == AcceptableContentTypes::class) {
+                            $allowedContentTypes = array_map('strtolower', $listener->getAllowedContentTypes());
+                            if (!in_array($contentType, $allowedContentTypes)) {
+                                $listener->throwException($contentType);
                             }
                         }
-                        $attributes = $reflectionMethod->getAttributes(AcceptableAccepts::class);
-                        foreach ($attributes as $attribute) {
-                            $listener = $attribute->newInstance();
-                            if ($listener::class == AcceptableAccepts::class) {
-                                $allowedAccepts = array_map('strtolower', $listener->getAllowedAccepts());
-                                if (!in_array('*/*', $accepts) && count(array_intersect($accepts, $allowedAccepts)) == 0) {
-                                    $listener->throwException($accepts);
-                                }
+                    }
+                    $attributes = $reflectionMethod->getAttributes(AcceptableAccepts::class);
+                    foreach ($attributes as $attribute) {
+                        $listener = $attribute->newInstance();
+                        if ($listener::class == AcceptableAccepts::class) {
+                            $allowedAccepts = array_map('strtolower', $listener->getAllowedAccepts());
+                            if (!in_array('*/*', $accepts) && count(array_intersect($accepts, $allowedAccepts)) == 0) {
+                                $listener->throwException($accepts);
                             }
                         }
                     }
@@ -150,22 +154,29 @@ class Route2
             }
             $controller->validate();
             $response = $controller->$action($r);
-            $code = $response["code"] ?? '200';
-            if (count($response) > 0) {
-                unset($response["code"]);
-                header("HTTP/1.0 $code " . Util::httpCodeText($code));
-                header('Content-type: application/json; charset=utf-8');
-                if (!array_is_list($response)) {
-                    $response["_execution_time"] = round((Util::microtime_float() - $time_start), 3);
-                }
-                if (!in_array($code, ['204', '303'])) {
-                    echo json_encode($response, JSON_UNESCAPED_UNICODE);
-                } else {
-                    header_remove('Content-type');;
-                }
+            $data = $response->getData();
+            $status = $response->getStatus();
+            header("HTTP/1.0 $status " . Util::httpCodeText($status));
+
+            if ($status == 302) {
+                return;
             }
-            end:
-            flush();
+            // Ensure no Content-Type (or body) is sent for 204/303
+            if ($status == 204) {
+                header_remove('Content-Type');
+                header_remove('Content-Length');
+                return;
+            }
+
+            if ($data !== null) {
+                if (getType($data) == "string") {
+                    header('Content-type: text/plain; charset=utf-8');
+                    echo $data;
+                    return;
+                }
+                header('Content-type: application/json; charset=utf-8');
+                echo json_encode($data, JSON_UNESCAPED_UNICODE);
+            }
         }
     }
 
@@ -173,12 +184,20 @@ class Route2
      * @param string $parameter
      * @return string|null
      */
-    static public function getParam(string $parameter): ?string
+    public function getParam(string $parameter): ?string
     {
-        if (isset(self::$params[$parameter])) {
-            return urldecode(self::$params[$parameter]);
+        if (isset($this->params[$parameter])) {
+            return urldecode($this->params[$parameter]);
         } else {
             return null;
+        }
+    }
+
+    public function miss(): void
+    {
+        if (!$this->isMatched) {
+            header('HTTP/1.0 404 Not Found');
+            echo "<h1>404 Not Found</h1>";
         }
     }
 }

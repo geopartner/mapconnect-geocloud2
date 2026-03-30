@@ -1,23 +1,31 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
 namespace app\event\tasks;
 
 use Amp\Cancellation;
 use Amp\Parallel\Worker\Task;
 use Amp\Sync\Channel;
-use app\models\Database;
-use app\models\Setting;
-use app\inc\Controller;
+use app\exceptions\GC2Exception;
+use app\inc\Connection;
+use app\models\Authorization;
 use Exception;
 
 error_reporting(E_ERROR | E_PARSE);
 
-readonly class AuthTask implements Task
+
+final readonly class AuthTask implements Task
 {
 
     public function __construct(
-        private array  $jwtData,
-        private string $rel
+        private array      $jwtData,
+        private string     $rel,
+        private Connection $connection,
     )
     {
     }
@@ -25,16 +33,19 @@ readonly class AuthTask implements Task
     /**
      * @throws Exception
      */
-    public function run(Channel $channel, Cancellation $cancellation): bool
+    public function run(Channel $channel, Cancellation $cancellation): array|false
     {
         echo "[INFO] AuthTask Worker PID: " . getmypid() . "\n";
-        Database::setDb($this->jwtData["database"]);;
         $isSuperUser = $this->jwtData["superUser"];
-        $uid = $this->jwtData["uid"];
-        $settingsData = (new Setting())->get()["data"];
-        $apiKey = $isSuperUser ? $settingsData->api_key : $settingsData->api_key_subuser->$uid;
-        $rels = [];
-        $res = (new Controller())->ApiKeyAuthLayer($this->rel, false, $rels, $isSuperUser ? null : $uid, $apiKey);
-        return $res['success'];
+        $subUser = $isSuperUser ? null : $this->jwtData["uid"];
+        $userGroup = $isSuperUser ? null : $this->jwtData["userGroup"];
+        $auth = new Authorization(connection: $this->connection);
+        try {
+            $res = $auth->check(relName: $this->rel, transaction: false, isAuth: true, subUser: $subUser, userGroup: $userGroup);
+        } catch (GC2Exception) {
+            return false;
+        }
+        $auth->close();
+        return $res;
     }
 }

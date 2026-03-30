@@ -1,14 +1,20 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
-use Amp\Future;
 use Amp\Parallel\Worker\Execution;
 use Amp\Postgres\PostgresConfig;
 use Amp\Postgres\PostgresConnectionPool;
 use Amp\Postgres\PostgresListener;
 use app\conf\App;
-use app\conf\Connection;
+use app\event\tasks\DatabaseTask;
 use app\event\tasks\PreparePayloadTask;
-use app\models\Database;
+use app\event\tasks\RegisterPayload;
+use app\inc\ShapeFilter;
 use function Amp\async;
 use function Amp\delay;
 
@@ -16,7 +22,7 @@ use function Amp\delay;
 //
 // --- Configuration ---
 //
-$batchSize = 10;    // Flush once 10 messages arrive
+$batchSize = 1000;    // Flush once 1000 messages arrive
 $timeThreshold = 2;     // Seconds to wait before flushing partial batches
 $timerFrequency = 1;     // How often (seconds) to check for stale batches
 $reconnectDelay = 5;     // How long (seconds) to wait before reconnect attempts
@@ -29,75 +35,141 @@ include_once __DIR__ . "/../models/Database.php";
 
 new App();
 
-$database = new Database();
-Connection::$param["postgisschema"] = "public";
+$workerPool = Amp\Parallel\Worker\workerPool();
 
-$dbs = ['mydb'];
-try {
-    $dbs = $database->listAllDbs()['data'];
-} catch (PDOException $e) {
+$dbs = [];
 
-}
-
-// Filter out any DB names you want to skip
-$skipList = [
-    'rdsadmin', 'template1', 'template0', 'postgres',
-    'gc2scheduler', 'template_geocloud', 'mapcentia'
-];
 // Per-DB “batch state”: count, startTime, and payload array
 $batchState = [];
 
 // Keep track of async futures for concurrency
 $futures = [];
 
-function preparePayloadWithPDO(array $batchPayload, string $db): Execution
-{
+$preparePayloadWithPDO = function (array $batchPayload, string $db) use ($workerPool): Execution {
     $task = new PreparePayloadTask($batchPayload, $db);
-    $worker = Amp\Parallel\Worker\createWorker();
-    return $worker->submit($task);
-}
+    return $workerPool->getWorker()->submit($task);
+};
+
+$RegisterPayloadWithPDO = function (array $batchPayload, string $db) use ($workerPool): Execution {
+    $task = new RegisterPayload($batchPayload, $db);
+    return $workerPool->getWorker()->submit($task);
+};
+
+$opMap = ['I' => 'INSERT', 'U' => 'UPDATE', 'D' => 'DELETE'];
 
 /**
  * Flush batch for a specific DB asynchronously.
+ * Drains the outbox table and processes the events.
  */
-$flushBatch = function (string $db, string $channelName = '') use (&$batchState, &$broadcastHandler) {
-    return async(function () use ($db, $channelName, &$batchState, &$broadcastHandler) {
-        $count = $batchState[$db]['count'];
-        $payLoad = $batchState[$db]['payLoad'];
-        $startTime = $batchState[$db]['startTime'];
-
-        echo "\n==========================================\n";
-        echo "DB:         {$db}\n";
-        echo "Channel:    " . ($channelName ?: '(periodic timer)') . "\n";
-        echo "Batch size: {$count}\n";
-        echo "Time:       " . (time() - $startTime) . " second(s)\n";
-        echo "Payloads:\n";
-        echo "==========================================\n\n";
-
-        // Await the asynchronous preparePayload to complete
-        $preparedPayload = preparePayloadWithPDO($payLoad, $db)->await();
+$flushBatch = function (string $db, string $channelName = '') use (&$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap) {
+    return async(function () use ($db, $channelName, &$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap) {
         try {
+            $pool = $batchState[$db]['pool'] ?? null;
+            if (!$pool) {
+                echo "[ERROR] No pool available for DB '{$db}', skipping flush\n";
+                return;
+            }
+
+            // Atomically drain outbox
+            $result = $pool->query(
+                "WITH d AS (DELETE FROM settings.outbox RETURNING id, op, schema_name, table_name, pk_column, pk_value, payload) " .
+                "SELECT * FROM d ORDER BY id"
+            );
+
+            $rows = [];
+            foreach ($result as $row) {
+                $rows[] = $row;
+            }
+
+            if (empty($rows)) {
+                return;
+            }
+
+            $drained = count($rows);
+
+            // Coalesce U-events: last-write-wins per (schema, table, pk)
+            $seenUpdates = [];
+            $coalesced = [];
+            for ($i = count($rows) - 1; $i >= 0; $i--) {
+                $row = $rows[$i];
+                if ($row['op'] === 'U') {
+                    $key = "{$row['schema_name']}.{$row['table_name']}:{$row['pk_value']}";
+                    if (isset($seenUpdates[$key])) {
+                        continue;
+                    }
+                    $seenUpdates[$key] = true;
+                }
+                $coalesced[] = $row;
+            }
+            $coalesced = array_reverse($coalesced);
+
+            $payLoad = [];
+            foreach ($coalesced as $row) {
+                $op = $opMap[$row['op']] ?? $row['op'];
+                $payLoad[] = "{$op},{$row['schema_name']},{$row['table_name']},{$row['pk_column']},{$row['pk_value']}";
+            }
+
+            $count = count($payLoad);
+            $startTime = $batchState[$db]['startTime'];
+
+            echo "\n==========================================\n";
+            echo "DB:         {$db}\n";
+            echo "Channel:    " . ($channelName ?: '(periodic timer)') . "\n";
+            echo "Drained:    {$drained}, after coalesce: {$count}\n";
+            echo "Time:       " . (time() - $startTime) . " second(s)\n";
+            echo "Payloads:\n";
+            echo "==========================================\n\n";
+
+            // Await the asynchronous preparePayload to complete
+            $preparedPayload = $preparePayloadWithPDO($payLoad, $db)->await();
+            // Await the asynchronous registerPayload to complete
+            $RegisterPayloadWithPDO($preparedPayload, $db)->await();
+
             $clients = $broadcastHandler->gateway->getClients();
             foreach ($clients as $client) {
-                if ($broadcastHandler->getProperties($client)['db'] !== $db) {
+                $props = $broadcastHandler->getProperties($client);
+                if ($props['db'] !== $db) {
                     continue;
                 }
+                // Filter payload per client relations (if specified)
+                $batchForClient = [];
+                $allowedRels = $props['rels'] ?? null;
+                if (is_array($allowedRels) && !empty($allowedRels) && is_array($preparedPayload)) {
+                    foreach ($preparedPayload[$db] as $key => $value) {
+                        if (in_array($key, $allowedRels)) {
+                            $batchForClient[$db][$key] = $value;;
+                        }
+                    }
+                }
+                if (empty($batchForClient)) {
+                    // Nothing to send to this client after filtering
+                    continue;
+                }
+                echo "[INFO] filtering payload\n";
+
+                $filter = new ShapeFilter();
+
+                $batch = [
+                    'type' => 'batch',
+                    'db' => $db,
+                    'batch' => $batchForClient
+                ];
+
+                //$where = "text = 'test3'";
+                $where = "";
+
+                $batch = $filter->filter($batch, $where);
+
                 echo "[INFO] Sending to: " . $client->getId() . "\n";
-                $client->sendText(json_encode([
-                        'type' => 'batch',
-                        'db' => $db,
-                        'batch' => $preparedPayload,
-                    ]
-                ));
+                $client->sendText(json_encode($batch));
             }
         } catch (Throwable $error) {
             echo "[ERROR in flushBatch] " . $error->getMessage() . "\n";
+        } finally {
+            // Always reset counters so the system keeps running
+            $batchState[$db]['count'] = 0;
+            $batchState[$db]['startTime'] = time();
         }
-
-        // Reset counters for this DB
-        $batchState[$db]['count'] = 0;
-        $batchState[$db]['startTime'] = time();
-        $batchState[$db]['payLoad'] = [];
     });
 };
 
@@ -111,13 +183,12 @@ $consumer = function (PostgresListener $listener, string $db) use (
     $flushBatch
 ) {
     foreach ($listener as $notification) {
-        // If this is the first message in a new batch, reset timer
+        // If this is the first wake-up in a new batch, reset timer
         if ($batchState[$db]['count'] === 0) {
             $batchState[$db]['startTime'] = time();
         }
-        // Accumulate
+        // Count wake-ups (actual data is in the outbox table)
         $batchState[$db]['count']++;
-        $batchState[$db]['payLoad'][] = $notification->payload;
         // Flush on batch size
         if ($batchState[$db]['count'] >= $batchSize) {
             $flushBatch($db, $notification->channel)->await();
@@ -143,22 +214,28 @@ $startListenerForDb = function (
     int      $reconnectDelay
 ) {
     // Pull out the global connection params:
-    $host = Connection::$param["postgishost"];
-    $user = Connection::$param["postgisuser"];
-    $pw = Connection::$param["postgispw"];
+    $host = (new \app\inc\Connection())->host;
+    $user = (new \app\inc\Connection())->user;
+    $port = (new \app\inc\Connection())->port;
+    $pw = (new \app\inc\Connection())->password;
 
-    // The channel(s) we want to listen to
-    $channel = "_gc2_notify_transaction";
+    // The channel for outbox wake-up notifications
+    $channel = "_gc2_outbox_wake";
 
     while (true) {
         $pool = null;
         try {
             $config = PostgresConfig::fromString(
-                "host={$host} user={$user} password={$pw} dbname={$db} sslmode=allow"
+                "host=$host user=$user password=$pw dbname=$db port=$port sslmode=allow"
             );
             // Attempt to connect + create a pool.
             // If DB isn't available, this will throw.
             $pool = new PostgresConnectionPool($config);
+            // Store pool reference so flushBatch can query outbox
+            $batchState[$db]['pool'] = $pool;
+            // Drain any events left in outbox from before this connection
+            $batchState[$db]['count'] = 1;
+            $batchState[$db]['startTime'] = 0;
             // Now attempt to listen on your channel.
             // If DB fails mid-listen, it throws inside consumer loop.
             $listener = $pool->listen($channel);
@@ -206,33 +283,33 @@ async(function () use (
     }
 });
 
-// --- Supervisor loop (Never exits, always restarts listeners) ---
-async(function () use (
-    $dbs, $skipList, &$batchState, $consumer,
-    $flushBatch, $batchSize, $reconnectDelay, $startListenerForDb
-) {
-    while (true) {
-        $futures = [];
+// --- Dynamic DB discovery loop: periodically fetch DBs and start listeners for new ones ---
+async(function () use (&$dbs, &$batchState, &$futures, &$workerPool, $consumer, $flushBatch, $batchSize, $reconnectDelay, $startListenerForDb) {
+    // Initial fetch to seed $dbs
+    $current = [];
+    try {
+        $current = $workerPool->getWorker()->submit(new DatabaseTask())->await();
+    } catch (Throwable $e) {
+        echo "[ERROR] Initial DB discovery failed: " . $e->getMessage() . "\n";
+    }
+    if (!is_array($current)) {
+        $current = [];
+    }
+    $dbs = $current;
 
-        foreach ($dbs as $db) {
-            if (in_array($db, $skipList, true) || str_contains($db, 'test')) {
-                continue;
-            }
+    // Ensure listeners started for initial set
+    foreach ($dbs as $db) {
+        if (!isset($futures[$db])) {
+            // Initialize batch state for this DB
             $batchState[$db] = [
                 'count' => 0,
                 'startTime' => time(),
-                'payLoad' => []
+                'pool' => null,
             ];
-            $futures[$db] = async(function () use (
-                $db, &$batchState, $consumer, $flushBatch,
-                $batchSize, $reconnectDelay, $startListenerForDb
-            ) {
+            $futures[$db] = async(function () use ($db, &$batchState, $consumer, $flushBatch, $batchSize, $reconnectDelay, $startListenerForDb) {
                 while (true) {
                     try {
-                        $startListenerForDb(
-                            $db, $batchState, $consumer, $flushBatch,
-                            $batchSize, $reconnectDelay
-                        );
+                        $startListenerForDb($db, $batchState, $consumer, $flushBatch, $batchSize, $reconnectDelay);
                     } catch (Throwable $e) {
                         echo "[CRITICAL] Listener crashed for DB '{$db}': " . $e->getMessage() . "\n";
                         echo "[INFO] Restarting listener for DB '{$db}' in {$reconnectDelay}s...\n";
@@ -241,17 +318,46 @@ async(function () use (
                 }
             });
         }
-        // Wait until ANY of the futures complete or fail unexpectedly
+    }
+
+    while (true) {
+        delay(10);
         try {
-            Future\await(array_values($futures));
-            echo "[WARNING] All listeners unexpectedly completed. Restarting immediately...\n";
+            $discovered = $workerPool->getWorker()->submit(new DatabaseTask())->await();
         } catch (Throwable $e) {
-            echo "[CRITICAL] One or more listeners failed unexpectedly: " . $e->getMessage() . "\n";
+            echo "[ERROR] DB discovery failed: " . $e->getMessage() . "\n";
+            continue;
         }
-        // If you reach this point, something caused your listener tasks to finish/crash.
-        // Sleep briefly to avoid rapid looping on permanent errors.
-        delay($reconnectDelay);
-        echo "[INFO] Supervisor restarting listeners...\n";
+        if (!is_array($discovered)) {
+            $discovered = [];
+        }
+        // Find new DBs not yet in $futures
+        foreach ($discovered as $db) {
+            if (!isset($futures[$db])) {
+                echo "[INFO] New DB discovered: {$db}. Starting listener...\n";
+                // Add to public list and start listener
+                if (!in_array($db, $dbs, true)) {
+                    $dbs[] = $db;
+                }
+                $batchState[$db] = [
+                    'count' => 0,
+                    'startTime' => time(),
+                    'pool' => null,
+                ];
+                $futures[$db] = async(function () use ($db, &$batchState, $consumer, $flushBatch, $batchSize, $reconnectDelay, $startListenerForDb) {
+                    while (true) {
+                        try {
+                            $startListenerForDb($db, $batchState, $consumer, $flushBatch, $batchSize, $reconnectDelay);
+                        } catch (Throwable $e) {
+                            echo "[CRITICAL] Listener crashed for DB '{$db}': " . $e->getMessage() . "\n";
+                            echo "[INFO] Restarting listener for DB '{$db}' in {$reconnectDelay}s...\n";
+                            delay($reconnectDelay);
+                        }
+                    }
+                });
+            }
+        }
+        // Optionally: we could handle removed DBs here by checking $futures keys not in discovered
     }
 });
 

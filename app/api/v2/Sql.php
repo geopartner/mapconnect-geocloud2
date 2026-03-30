@@ -17,7 +17,6 @@ use app\inc\TableWalkerRelation;
 use app\inc\TableWalkerRule;
 use app\inc\UserFilter;
 use app\models\Geofence;
-use app\models\Preparedstatement as PreparedstatementModel;
 use app\models\Rule;
 use app\models\Setting;
 use Psr\Cache\InvalidArgumentException;
@@ -77,9 +76,12 @@ class Sql extends Controller
         $dbSplit = explode("@", $r["user"]);
         if (sizeof($dbSplit) == 2) {
             $this->subUser = $dbSplit[0];
+            $database = $dbSplit[1];
         } else {
             $this->subUser = null;
+            $database = $dbSplit[0];
         }
+        $this->connection = new \app\inc\Connection(database: $database);
 
         // Check if body is JSON
         // Supports both GET and POST
@@ -94,21 +96,6 @@ class Sql extends Controller
             $typeFormats = $json["type_formats"] ?? Input::$params["type_formats"] ?? [];
             $srs = $json["srs"] ?? Input::$params["srs"] ?? $srs ?? null;
             $outputFormat = !empty($json["format"]) ? $json["format"] : (!empty($json["output_format"]) ? $json["output_format"] : Input::$params["format"] ?? Input::$params["output_format"]);
-
-            if (!empty($json["method"])) {
-                $method = $json["method"];
-                $pres = new PreparedstatementModel();
-                try {
-                    $preStm = $pres->getByName($method);
-                } catch (Exception $e) {
-                    throw new Exception("Method not found", -32601, null);
-                }
-                $json["q"] = $preStm['data']['statement'];
-                $typeHints = json_decode($preStm['data']['type_hints'], true);
-                $typeFormats = json_decode($preStm['data']['type_formats'], true);
-                $outputFormat = $preStm['data']['output_format'];
-                $srs = $preStm['data']['srs'];
-            }
 
             // Set input params from JSON
             // ==========================
@@ -161,33 +148,18 @@ class Sql extends Controller
         $settings = new Setting();
         $res = $settings->get();
         $this->apiKey = $res['data']->api_key;
-
+        $this->api->begin();
         $serializedResponse = $this->transaction(Input::get('client_encoding'), Input::get('type_hints'), true, Input::get('type_formats'));
-
+        $this->api->commit();
 
         // Check if $this->data is set in SELECT section
         if (!isset($this->data)) {
             $this->data = $serializedResponse;
         }
         $response = unserialize($this->data);
-        
-        // For CSV/Excel formats, the sql() method outputs directly and returns empty array
-        // Exit immediately to prevent Route layer from appending JSON metadata
-        $format = strtolower(Input::get('format') ?: 'geojson');
-        if (in_array($format, ['csv', 'excel']) && empty($response)) {
-            exit();
+        if (!empty($this->cacheInfo)) {
+            $response["cache"] = $this->cacheInfo;
         }
-        
-        // Only add metadata for JSON-based formats
-        $jsonFormats = ['json', 'geojson', 'jsonp'];
-        
-        if (in_array($format, $jsonFormats)) {
-            if (!empty($this->cacheInfo)) {
-                $response["cache"] = $this->cacheInfo;
-            }
-            $response["_peak_memory_usage"] = round(memory_get_peak_usage() / 1024) . " KB";
-        }
-
         return $response;
     }
 
@@ -210,7 +182,6 @@ class Sql extends Controller
             } else {
                 $this->subUser = null;
             }
-
             // Set API key from headers
             Input::setParams(
                 [
@@ -257,9 +228,14 @@ class Sql extends Controller
 
     /**
      * @param string|null $clientEncoding
+     * @param array|null $typeHints
+     * @param bool $convertReturning
+     * @param array|null $typeFormats
      * @return string
-     * @throws PhpfastcacheInvalidArgumentException
-     * @throws Exception
+     * @throws GC2Exception
+     * @throws InvalidArgumentException
+     * @throws \PhpOffice\PhpSpreadsheet\Reader\Exception
+     * @throws \PhpOffice\PhpSpreadsheet\Writer\Exception
      */
     private function transaction(?string $clientEncoding = null, ?array $typeHints = null, bool $convertReturning = true, ?array $typeFormats = null): string
     {
@@ -342,19 +318,31 @@ class Sql extends Controller
                 $this->cacheInfo["signature"] = md5(serialize($this->data));
             } else {
                 ob_start();
-                $this->response = $this->api->sql($this->q, $clientEncoding, Input::get('format') ?: "geojson", Input::get('geoformat') ?: null, Input::get('allstr') ?: null, Input::get('alias') ?: null, null, null, Input::get('convert_types') ?: null, Input::get('params') ?: null, $typeHints, $typeFormats);
-                if (count($this->response) > 0) {
-                    $response["statement"] = $this->q;
-                    $this->addAttr($response);
-                    echo serialize($this->response);
-                    $this->data = ob_get_contents();
-                    if ($lifetime > 0 && !empty($CachedString)) {
-                        $CachedString->set($this->data)->expiresAfter($lifetime ?: 1);// Because 0 secs means cache will life for ever, we set cache to one sec
-                        Cache::save($CachedString);
-                        $this->cacheInfo["hit"] = false;
-                    }
-                    ob_get_clean();
+                $this->response = $this->api->sql(
+                    q: $this->q,
+                    clientEncoding: $clientEncoding,
+                    format: Input::get('format') ?: "geojson",
+                    geoformat: Input::get('geoformat') ?: null,
+                    csvAllToStr: Input::get('allstr') ?: false,
+                    aliasesFrom: Input::get('alias') ?: null,
+                    convertTypes: Input::get('convert_types') ?: false,
+                    parameters: Input::get('params') ?: null,
+                    typeHints: $typeHints,
+                    typeFormats: $typeFormats
+                );
+                if (empty($this->response)) {
+                    exit();
                 }
+                $response["statement"] = $this->q;
+                $this->addAttr($response);
+                echo serialize($this->response);
+                $this->data = ob_get_contents();
+                if ($lifetime > 0 && !empty($CachedString)) {
+                    $CachedString->set($this->data)->expiresAfter($lifetime ?: 1);// Because 0 secs means cache will life for ever, we set cache to one sec
+                    Cache::save($CachedString);
+                    $this->cacheInfo["hit"] = false;
+                }
+                ob_get_clean();
             }
         } else {
             throw new GC2Exception("Check your SQL. Could not recognise it as either SELECT, INSERT, UPDATE or DELETE ($operation)", 403, null, "SQL_STATEMENT_NOT_RECOGNISED");

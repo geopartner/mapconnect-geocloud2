@@ -9,7 +9,8 @@
 namespace app\models;
 
 use app\conf\App;
-use app\conf\Connection;
+use app\inc\Connection;
+use app\conf\Connection as StaticConnection;
 use app\inc\Model;
 use PDOException;
 
@@ -20,84 +21,91 @@ use PDOException;
  */
 class Database extends Model
 {
+    function __construct(?Connection $connection = null)
+    {
+        parent::__construct($connection);
+    }
+
     /**
-     * @param string $name
-     * @param null $db
-     * @param bool $isSuperUser
+     * Creates a user in the database and assigns roles, privileges, or connections depending on the parameters.
+     *
+     * @param string $name The name of the user to be created.
+     * @param string|null $db The database name for which the user will be granted privileges (optional).
+     * @param bool $isSuperUser Flag indicating if the created user should have superuser privileges (default is false).
      * @return void
      */
-    public function createUser(string $name, $db = null, bool $isSuperUser = false): void
+    public function createUser(string $name, ?string $db = null, bool $isSuperUser = false): void
     {
-        $this->connect();
-        // First try to create user if not exists
+        // First, try to create the user if not exists
         $sql = "select usename from pg_user where usename=:name";
         $res = $this->prepare($sql);
-        $res->execute(['name' => $name]);
+        $this->execute($res, ['name' => $name]);
         if ($res->rowCount() == 0) {
             $sql = "CREATE USER \"$name\"";
-            $this->db->query($sql);
+            $this->execQuery($sql);
         }
         // Set password
-        $sql = "ALTER ROLE \"$name\" PASSWORD '" . Connection::$param['postgispw'] . "'";
-        $this->db->query($sql);
-
+        $sql = "ALTER ROLE \"$name\" PASSWORD '" . $this->postgispw . "'";
+        $this->execQuery($sql);
         if ($db && !$isSuperUser) {
             // We grant the owner to user
             // This can only be done by a superuser
             try {
                 $sql = "GRANT \"$db\" TO \"$name\"";
-                $this->db->query($sql);
+                $this->execQuery($sql);
             } catch (PDOException $e) {
                 error_log($e->getMessage());
             }
             // And connect
             $sql = "GRANT CONNECT ON DATABASE \"$db\" TO \"$name\"";
-            $this->db->query($sql);
+            $this->execQuery($sql);
         }
         if ($isSuperUser) {
-            $sql = "GRANT \"$name\" to $this->postgisuser";
-            $this->db->query($sql);
-            $this->db->query($sql);
+            if ($name != $this->postgisuser) {
+                $sql = "GRANT \"$name\" to $this->postgisuser";
+                $this->execQuery($sql);
+            }
         }
     }
 
     /**
-     * @param string $name
-     * @throws PDOException
+     * Drops a user from the database.
+     *
+     * @param string $name The name of the user to be dropped.
+     * @return void
      */
     public function dropUser(string $name): void
     {
-        $this->connect();
         $sql = "DROP USER \"$name\"";
-        $this->db->query($sql);
+        $this->execQuery($sql);
     }
 
     /**
-     * @param string $name
-     * @throws PDOException
+     * Drops a database with the specified name.
+     *
+     * @param string $name The name of the database to drop.
+     * @return void
      */
     public function dropDatabase(string $name): void
     {
-        $this->connect();
         $sql = "DROP DATABASE \"$name\"";
-        $this->db->query($sql);
+        $this->execQuery($sql);
     }
 
     /**
-     * @param string $name
-     * @param Model|null $model
-     * @return array<bool|string>
+     * Creates a new schema in the database.
+     *
+     * @param string $name The name of the schema to create.
+     * @param Model|null $model Optional. A model instance to use for preparing the SQL statement.
+     * @return array An associative array containing the success status, message, and the name of the created schema.
      */
     public function createSchema(string $name, ?Model $model = null): array
     {
+        $model = $model ?? $this;
         $saveName = self::toAscii($name, null, "_");
         $sql = "CREATE SCHEMA \"" . $saveName . "\"";
-        if ($model) {
-            $res = $model->prepare($sql);
-        } else {
-            $res = $this->prepare($sql);
-        }
-        $res->execute();
+        $res = $model->prepare($sql);
+        $model->execute($res);
         $response['success'] = true;
         $response['message'] = "Schema created";
         $response['schema'] = $saveName;
@@ -105,34 +113,62 @@ class Database extends Model
     }
 
     /**
-     * @param string $screenName
-     * @param string $template
-     * @param string $encoding
-     * @return void
-     * @throws PDOException
+     * Grants usage permissions on a schema to a specified parent user.
+     *
+     * @param string $schema
+     * @param string $parentUser The name of the user to grant usage permissions to.
+     * @return void This method does not return a value.
      */
-    public function createdb(string $screenName, string $template, string $encoding = "UTF8"): void
+    public function grantUsage(string $schema, string $user) : void
     {
-        // Create user for the database
-        $this->createUser($screenName, null, true);
-        // Create the database if not exists
-        $sql = "select datname from pg_database where datname=:db";
+        $sql = "GRANT USAGE ON SCHEMA \"" . $schema . "\" TO $user";
         $res = $this->prepare($sql);
-        $res->execute(['db' => $screenName]);
-        if ($res->rowCount() == 0) {
-            $sql = "CREATE DATABASE $screenName WITH ENCODING='$encoding' TEMPLATE=$template CONNECTION LIMIT=-1";
-            $this->db->query($sql);
-        }
-        // We revoke connect from public, so other users can't connect to this database
-        $sql = "REVOKE connect ON DATABASE $screenName FROM PUBLIC";
-        $this->db->query($sql);
-        // Change ownership on all objects in the database
-        $this->changeOwner($screenName, $screenName);
+        $this->execute($res);
     }
 
     /**
-     * @param string $name
-     * @return array<bool>
+     * Grants all privileges on a specified type of relation within a given schema to a specific user.
+     *
+     * @param string $schema
+     * @param string $user
+     * @return void
+     */
+    public function setDefaultPrivileges(string $schema, string $user): void
+    {
+        foreach (['TABLES', 'SEQUENCES', 'FUNCTIONS', 'TYPES'] as $type) {
+            $sql = "ALTER DEFAULT PRIVILEGES IN SCHEMA $schema GRANT ALL PRIVILEGES ON $type TO $user";
+            $res = $this->prepare($sql);
+            $this->execute($res);
+        }
+    }
+
+    /**
+     * Creates a database with the specified properties if it does not already exist.
+     *
+     * @param string $screenName The name of the database to create, which also serves as the username.
+     * @param string $template The template database to use for creating the new database.
+     * @param string $encoding The character encoding to set for the database. Defaults to "UTF8".
+     * @return void
+     */
+    public function createdb(string $screenName, string $template, string $encoding = "UTF8"): void
+    {
+        $sql = "select datname from pg_database where datname=:db";
+        $res = $this->prepare($sql);
+        $this->execute($res, ['db' => $screenName]);
+        if ($res->rowCount() == 0) {
+            $sql = "CREATE DATABASE $screenName WITH ENCODING='$encoding' TEMPLATE=$template CONNECTION LIMIT=-1";
+            $this->execQuery($sql, 'PG');
+        }
+        // We revoke connect from public, so other users can't connect to this database
+        $sql = "REVOKE connect ON DATABASE $screenName FROM PUBLIC";
+        $this->execQuery($sql);
+    }
+
+    /**
+     * Checks if a specified database exists.
+     *
+     * @param string $name The name of the database to check for existence.
+     * @return array An associative array indicating whether the database exists with a 'success' key set to true or false.
      */
     public function doesDbExist(string $name): array
     {
@@ -147,7 +183,9 @@ class Database extends Model
     }
 
     /**
-     * @return array<bool|string|array<string>>
+     * Retrieves a list of all database names.
+     *
+     * @return array Returns an associative array with a success status and a list of database names.
      */
     public function listAllDbs(): array
     {
@@ -163,29 +201,24 @@ class Database extends Model
     }
 
     /**
-     * @return array<bool|string|int|array>
+     * Retrieves a list of all schemas in the database along with the count of their geometry columns.
+     *
+     * @return array Returns an associative array containing the success status, relevant data, and,
+     *               in case of an error, the error message and code.
      */
     public function listAllSchemas(): array
     {
         $arr = [];
         $sql = "SELECT count(*) AS count,f_table_schema FROM geometry_columns where f_table_schema not like 'pg_%' GROUP BY f_table_schema";
         $res = $this->prepare($sql);
-        try {
-            $res->execute();
-        } catch (PDOException $e) {
-            $response['success'] = false;
-            $response['message'] = $e->getMessage();
-            $response['code'] = 401;
-            return $response;
-        }
+        $this->execute($res);
         while ($row = $this->fetchRow($res)) {
             $count[$row['f_table_schema']] = $row['count'];
         }
-
         $sql = "SELECT nspname AS schema_name FROM pg_catalog.pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname<>'settings' AND nspname<>'information_schema' AND nspname<>'sqlapi' ORDER BY nspname";
         $res = $this->prepare($sql);
         try {
-            $res->execute();
+            $this->execute($res);
         } catch (PDOException $e) {
             $response['success'] = false;
             $response['message'] = $e->getMessage();
@@ -201,80 +234,86 @@ class Database extends Model
     }
 
     /**
-     * @param string $db
-     * @param string $newOwner
+     * Changes the owner of a specified database, its schemas, tables, views, and sequences to a new owner.
+     *
+     * @param string $db The name of the database to change the ownership for.
+     * @param string $newOwner The name of the new owner to assign to the database and its objects.
      * @return void
-     * @throws PDOException
      */
     public function changeOwner(string $db, string $newOwner): void
     {
-        $this->db = null;
-        $this->postgisdb = $db;
-
-        $this->connect();
-        $this->begin();
+        $model = new Model(connection: new Connection(database: $db));
+        $model->begin();
 
         //Database
         $sql = "ALTER DATABASE $db OWNER TO $newOwner";
-        $this->db->query($sql);
+        $model->execQuery($sql);
 
         // Schema
         $sql = "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name<>'information_schema'";
-        $res = $this->db->query($sql);
-        $rows1 = $this->fetchAll($res);
+        $res = $model->execQuery($sql);
+        $rows1 = $model->fetchAll($res);
 
         // tables
         $sql = "SELECT '\"'||schemaname||'\".\"'||tablename||'\"' AS \"table\" FROM pg_tables WHERE schemaname NOT LIKE 'pg_%' AND schemaname<>'information_schema'";
-        $this->db->query($sql);
-        $res = $this->execQuery($sql);
-        $rows2 = $this->fetchAll($res);
-
+        $model->execQuery($sql);
+        $res = $model->execQuery($sql);
+        $rows2 = $model->fetchAll($res);
 
         $sql = "SELECT '\"'||table_schema||'\".\"'||table_name||'\"' AS \"table\" FROM information_schema.views WHERE table_schema NOT LIKE 'pg_%' AND table_schema<>'information_schema'";
-        $res = $this->db->query($sql);
-        $rows3 = $this->fetchAll($res);
+        $res = $model->execQuery($sql);
+        $rows3 = $model->fetchAll($res);
 
         $sql = "SELECT '\"'||sequence_schema||'\".\"'||sequence_name||'\"' AS \"table\" FROM information_schema.sequences WHERE sequence_schema NOT LIKE 'pg_%' AND sequence_schema<>'information_schema'";
-        $res = $this->db->query($sql);
-        $rows4 = $this->fetchAll($res);
+        $res = $model->execQuery($sql);
+        $rows4 = $model->fetchAll($res);
 
         foreach ($rows1 as $row) {
             $sql = "ALTER SCHEMA {$row["schema_name"]} OWNER TO $newOwner";
-            $this->db->query($sql);
+            $model->execQuery($sql);
         }
         foreach ($rows1 as $row) {
             $sql = "GRANT USAGE ON SCHEMA {$row["schema_name"]} TO $newOwner";
-            $this->db->query($sql);
+            $model->execQuery($sql);
         }
         foreach ($rows2 as $row) {
             $sql = "ALTER TABLE {$row["table"]} OWNER TO $newOwner";
-            $this->db->query($sql);
+            $model->execQuery($sql);
         }
         foreach ($rows3 as $row) {
             $sql = "ALTER TABLE {$row["table"]} OWNER TO $newOwner";
-            $this->db->query($sql);
+            $model->execQuery($sql);
         }
         foreach ($rows4 as $row) {
-            $this->db->query($sql);
+            $model->execQuery($sql);
             $sql = "ALTER TABLE {$row["table"]} OWNER TO $newOwner";
         }
-        $this->commit();
+        $model->commit();
     }
 
     /**
-     * @param string|null $db
+     * Sets the database name for the PostGIS connection.
+     *
+     * @param string|null $db The name of the database to set. Null if no database is specified.
+     * @return void
      */
     static function setDb(?string $db): void
     {
-        Connection::$param["postgisdb"] = $db;
+        StaticConnection::$param["postgisdb"] = $db;
     }
 
+    /**
+     * Sets connection parameters based on the provided JWT data.
+     *
+     * @param array $jwt The JWT containing connection data, including the database name and user ID.
+     * @return void
+     */
     static function setFromJwt(array $jwt): void
     {
         $data = $jwt['data'];
         // Set connection params
-        Connection::$param["postgisdb"] = $data['database'];
-        Connection::$param["postgisuser"] = $data['uid'];
+        StaticConnection::$param["postgisdb"] = $data['database'];
+        StaticConnection::$param["postgisuser"] = $data['uid'];
     }
 
     /**
@@ -282,13 +321,15 @@ class Database extends Model
      */
     static function getDb(): string
     {
-        return Connection::$param["postgisdb"];
+        return StaticConnection::$param["postgisdb"];
     }
 
     /**
-     * @param string $schema
-     * @param string $name
-     * @return array<bool|int|string|array<string>>
+     * Renames a specified database schema and updates related configurations.
+     *
+     * @param string $schema The name of the schema to be renamed.
+     * @param string $name The new name to assign to the schema.
+     * @return array An associative array containing the success status, message, and updated schema information.
      */
     public function renameSchema(string $schema, string $name): array
     {
@@ -305,16 +346,17 @@ class Database extends Model
         $whereClauseR = "r_table_schema=''$schema''";
         $query = "SELECT * FROM settings.getColumns('$whereClauseG','$whereClauseR') ORDER BY sort_id";
         $res = $this->prepare($query);
-        $res->execute();
+        $this->execute($res);
         while ($row = $this->fetchRow($res)) {
             $query = "UPDATE settings.geometry_columns_join SET _key_ = '$newName.{$row['f_table_name']}.{$row['f_geometry_column']}' WHERE _key_ ='{$row['f_table_schema']}.{$row['f_table_name']}.{$row['f_geometry_column']}'";
             $resUpdate = $this->prepare($query);
             $resUpdate->execute();
+            $this->execute($resUpdate);
         }
         $query = "ALTER SCHEMA $schema RENAME TO $newName";
         $res = $this->prepare($query);
-        $res->execute();
-        $setObj = new Setting();
+        $this->execute($res);
+        $setObj = new Setting(connection: $this->connection);
         $settings = $setObj->getArray();
         $extents = $settings->extents->$schema;
         $center = $settings->center->$schema;
@@ -330,7 +372,7 @@ class Database extends Model
                 $sql = "UPDATE settings.viewer SET viewer='" . json_encode($settings) . "'";
             }
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
         }
         $this->commit();
         $response['success'] = true;
@@ -340,8 +382,12 @@ class Database extends Model
     }
 
     /**
-     * @param string $schema
-     * @return array<bool|string|int>
+     * Deletes a specified schema from the database.
+     *
+     * @param string $schema The name of the schema to delete.
+     * @param bool $commit Whether to commit the changes after executing the deletion. Defaults to true.
+     * @return array An associative array containing the keys 'success' (bool) indicating the operation result,
+     *               'message' (string) providing details about the operation, and optionally 'code' (int) in case of failure.
      */
     public function deleteSchema(string $schema, bool $commit = true): array
     {
@@ -357,10 +403,10 @@ class Database extends Model
         }
         $query = "DROP SCHEMA $schema CASCADE";
         $res = $this->prepare($query);
-        $res->execute();
+        $this->execute($res);
         $query = "DELETE FROM settings.geometry_columns_join WHERE _key_ LIKE '$schema.%'";
         $res = $this->prepare($query);
-        $res->execute();
+        $this->execute($res);
         if ($commit) {
             $this->commit();
         }
@@ -369,21 +415,33 @@ class Database extends Model
         return $response;
     }
 
+    /**
+     * Checks if a specified schema exists in the database.
+     *
+     * @param string $name The name of the schema to check for existence.
+     * @return bool Returns true if the schema exists, false otherwise.
+     */
     public function doesSchemaExist(string $name): bool
     {
         $sql = "SELECT schema_name FROM information_schema.schemata where schema_name=:name";
         $res = $this->prepare($sql);
-        $res->execute(["name" => $name]);
+        $this->execute($res, ["name" => $name]);
         $row = $this->fetchRow($res);
         return (bool)$row;
     }
 
+    /**
+     * Checks if a specified relation exists in the database.
+     *
+     * @param string $name The name of the relation to check for existence.
+     * @return bool Returns true if the relation exists, false otherwise.
+     */
     public function doesRelationExist(string $name): bool
     {
         $sql = "SELECT 1 FROM " . $this->doubleQuoteQualifiedName($name) . " LIMIT 1";
         try {
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             return true;
         } catch (PDOException) {
             return false;

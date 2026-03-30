@@ -1,4 +1,10 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
 use Amp\Http\Server\DefaultErrorHandler;
 use Amp\Http\Server\RequestHandler\ClosureRequestHandler;
@@ -32,13 +38,14 @@ EventLoop::setErrorHandler(function (Throwable $throwable): void {
 
 new App();
 
+ini_set("memory_limit", "1G");
+
 $logHandler = new StreamHandler(getStdout());
 $logHandler->setFormatter(new ConsoleFormatter());
 $logger = new Logger('server');
 $logger->pushHandler($logHandler);
-$server = SocketHttpServer::createForDirectAccess($logger);
+$server = SocketHttpServer::createForDirectAccess(logger: $logger, connectionLimit: 10000, connectionLimitPerIp: 10);
 $server->expose(new Socket\InternetAddress('0.0.0.0', 80));
-$server->expose(new Socket\InternetAddress('[::1]', 80));
 $errorHandler = new DefaultErrorHandler();
 
 $acceptor = new Rfc6455Acceptor();
@@ -47,7 +54,7 @@ $broadcastHandler = new WsBroadcast();
 $wsBroadcast = new Websocket($server, $logger, $acceptor, $broadcastHandler);
 
 $router = new Router($server, $logger, $errorHandler);
-$router->addRoute('GET', '/broadcast', $wsBroadcast);
+$router->addRoute('GET', '/', $wsBroadcast);
 $router->addRoute('GET', '/ping', new ClosureRequestHandler(
     function () {
         return new Response(
@@ -56,12 +63,12 @@ $router->addRoute('GET', '/ping', new ClosureRequestHandler(
             body: 'pong',
         );
     },
-));//$router->setFallback(new DocumentRoot($server, $errorHandler, '/var/www/geocloud2/public'));
+));
 
 $server->start($router, $errorHandler);
 
 foreach (glob(dirname(__FILE__) . "/functions/*.php") as $filename) {
-    include_once($filename);
+   include_once($filename);
 }
 
 include_once __DIR__ . "/pglistner.php";

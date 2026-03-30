@@ -86,21 +86,68 @@ class Util
     public static function httpCodeText(int|string $code): string|null
     {
         $codes = array(
-            200 => "OK",
-            304 => "Not Modified",
-            400 => "Bad Request",
-            401 => "Unauthorized",
-            403 => "Forbidden",
-            404 => "Not Found",
-            406 => "Not Acceptable",
-            410 => "Gone",
-            420 => "Enhance Your Calm",
-            422 => "Unprocessable Entity",
-            429 => "Too Many Requests",
-            500 => "Internal Server Error",
-            502 => "Bad Gateway",
-            503 => "Service Unavailable",
-            504 => "Gateway timeout"
+            100 => 'Continue',
+            102 => 'Processing',
+            103 => 'Early Hints',
+            200 => 'OK',
+            201 => 'Created',
+            202 => 'Accepted',
+            203 => 'Non-Authoritative Information',
+            204 => 'No Content',
+            205 => 'Reset Content',
+            206 => 'Partial Content',
+            207 => 'Multi-Status',
+            208 => 'Already Reported',
+            226 => 'IM Used',
+            300 => 'Multiple Choices',
+            301 => 'Moved Permanently',
+            302 => 'Found',
+            303 => 'See Other',
+            304 => 'Not Modified',
+            305 => 'Use Proxy',
+            306 => 'Reserved',
+            307 => 'Temporary Redirect',
+            308 => 'Permanent Redirect',
+            400 => 'Bad Request',
+            401 => 'Unauthorized',
+            402 => 'Payment Required',
+            403 => 'Forbidden',
+            404 => 'Not Found',
+            405 => 'Method Not Allowed',
+            406 => 'Not Acceptable',
+            407 => 'Proxy Authentication Required',
+            408 => 'Request Timeout',
+            409 => 'Conflict',
+            410 => 'Gone',
+            411 => 'Length Required',
+            412 => 'Precondition Failed',
+            413 => 'Request Entity Too Large',
+            414 => 'Request-URI Too Long',
+            415 => 'Unsupported Media Type',
+            416 => 'Requested Range Not Satisfiable',
+            417 => 'Expectation Failed',
+            418 => 'Unassigned',
+            421 => 'Misdirected Request',
+            422 => 'Unprocessable Entity',
+            423 => 'Locked',
+            424 => 'Failed Dependency',
+            425 => 'Too Early',
+            426 => 'Upgrade Required',
+            428 => 'Precondition Required',
+            429 => 'Too Many Requests',
+            431 => 'Request Header Fields Too Large',
+            451 => 'Unavailable For Legal Reasons',
+            500 => 'Internal Server Error',
+            501 => 'Not Implemented',
+            502 => 'Bad Gateway',
+            503 => 'Service Unavailable',
+            504 => 'Gateway Timeout',
+            505 => 'HTTP Version Not Supported',
+            506 => 'Variant Also Negotiates',
+            507 => 'Insufficient Storage',
+            508 => 'Loop Detected',
+            510 => 'Not Extended',
+            511 => 'Network Authentication Required'
         );
         return $codes[$code] ?? null;
     }
@@ -375,5 +422,63 @@ class Util
             return false;
         }
         return true;
+    }
+
+    /**
+     * Generate a strong password with specified length, character sets, and option to add dashes
+     *
+     * @param int $length Length of the password (default 15)
+     * @param bool $add_dashes Whether to add dashes in the password (default false)
+     * @param string $available_sets Character sets to include in the password (default 'luds')
+     * @return string Generated password
+     */
+    public function generateStrongPassword(int $length = 15, bool $add_dashes = false, string $available_sets = 'luds'): string
+    {
+        function tweak_array_rand($array): int|array|string
+        {
+            if (function_exists('random_int')) {
+                return random_int(0, count($array) - 1);
+            } elseif(function_exists('mt_rand')) {
+                return mt_rand(0, count($array) - 1);
+            } else {
+                return array_rand($array);
+            }
+        }
+        $sets = array();
+        if(str_contains($available_sets, 'l'))
+            $sets[] = 'abcdefghjkmnpqrstuvwxyz';
+        if(str_contains($available_sets, 'u'))
+            $sets[] = 'ABCDEFGHJKMNPQRSTUVWXYZ';
+        if(str_contains($available_sets, 'd'))
+            $sets[] = '23456789';
+        if(str_contains($available_sets, 's'))
+            $sets[] = '!@#$%&*?';
+
+        $all = '';
+        $password = '';
+        foreach($sets as $set)
+        {
+            $password .= $set[tweak_array_rand(str_split($set))];
+            $all .= $set;
+        }
+
+        $all = str_split($all);
+        for($i = 0; $i < $length - count($sets); $i++)
+            $password .= $all[tweak_array_rand($all)];
+
+        $password = str_shuffle($password);
+
+        if(!$add_dashes)
+            return $password;
+
+        $dash_len = floor(sqrt($length));
+        $dash_str = '';
+        while(strlen($password) > $dash_len)
+        {
+            $dash_str .= substr($password, 0, $dash_len) . '-';
+            $password = substr($password, $dash_len);
+        }
+        $dash_str .= $password;
+        return $dash_str;
     }
 }

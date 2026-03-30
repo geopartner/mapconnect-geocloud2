@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
- * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -13,6 +12,7 @@ namespace app\inc;
 use app\exceptions\ServiceException;
 use app\models\Setting;
 use PDOException;
+use Psr\Cache\InvalidArgumentException;
 
 final class BasicAuth
 {
@@ -20,8 +20,11 @@ final class BasicAuth
     private bool $isSession;
     private bool $isSubuser = false;
 
-    function __construct()
+    function __construct(public ?Connection $connection = null)
     {
+        if ($this->connection == null) {
+            $this->connection = new Connection();
+        }
         $this->isSession = Session::isAuth();
         if ($this->isSession) {
             $this->user = Session::getUser();
@@ -36,11 +39,11 @@ final class BasicAuth
      * @param string $layerName The name of the layer to be accessed. It is used to determine the schema and check user privileges.
      * @param bool $isTransaction
      * @return void
-     * @throws ServiceException
+     * @throws ServiceException|InvalidArgumentException
      */
     public function authenticate(string $layerName, bool $isTransaction): void
     {
-        $setting = new Setting();
+        $setting = new Setting(connection: $this->connection);
         $settings = $setting->get();
         if (!$this->isSession || $_SESSION['parentdb'] != $setting->postgisdb) {
             if (!empty(Input::getAuthUser())) {
@@ -60,12 +63,11 @@ final class BasicAuth
         // AUTHENTICATION SUCCESSFUL
         $schema = explode('.', $layerName)[0];
         if ($this->isSubuser && $this->user != $schema) {
-            // This query is abyssmally slow if _view is used, so we use the _join instead
-            $sql = "SELECT * FROM settings.geometry_columns_join WHERE _key_ LIKE :schema";
-            $postgisObject = new Model();
+            $sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_ LIKE :schema";
+            $postgisObject = new Model(connection: $this->connection);
             $res = $postgisObject->prepare($sql);
             try {
-                $res->execute(array("schema" => $layerName . ".%"));
+                $postgisObject->execute($res, array("schema" => $layerName . ".%"));
             } catch (PDOException $e) {
                 throw new ServiceException($e->getMessage());
             }

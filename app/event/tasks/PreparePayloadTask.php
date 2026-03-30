@@ -1,18 +1,25 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
 namespace app\event\tasks;
 
 use Amp\Cancellation;
 use Amp\Parallel\Worker\Task;
 use Amp\Sync\Channel;
+use app\conf\App;
 use app\exceptions\GC2Exception;
 use app\inc\Cache;
-use app\conf\App;
-use app\models\Database;
+use app\inc\Connection;
 use app\models\Sql;
 use PhpOffice\PhpSpreadsheet\Writer\Exception;
 
-readonly class PreparePayloadTask implements Task
+
+final readonly class PreparePayloadTask implements Task
 {
     public function __construct(
         private array  $batchPayload,
@@ -30,13 +37,10 @@ readonly class PreparePayloadTask implements Task
     public function run(Channel $channel, Cancellation $cancellation): array
     {
         echo "[INFO] PreparePayloadTask Worker PID: " . getmypid() . "\n";
-
         new App();
         Cache::setInstance();
-
-        Database::setDb($this->db);
-        $api = new Sql();
-        $api->connect();
+        $api = new Sql(connection: new Connection(database: $this->db));
+        $api->begin();
 
         $results = [];
         $grouped = [];
@@ -64,7 +68,6 @@ readonly class PreparePayloadTask implements Task
                 $grouped[$groupKey]['values'][] = $value;
             }
         }
-        // Run blocking queries in batch
         foreach ($grouped as $grp) {
             $schemaTable = $grp['schemaTable'];
             $key = $grp['key'];
@@ -73,15 +76,16 @@ readonly class PreparePayloadTask implements Task
             $inList = implode(',', $uniqueVals);
             $sql = "SELECT * FROM {$schemaTable} WHERE \"{$key}\" IN ($inList)";
             echo $sql . "\n";
-            $response = $api->sql($sql);
+            $response = $api->sql(q: $sql, format: 'json', convertTypes: true);
             if (!isset($results[$this->db][$schemaTable]['full_data'])) {
                 $results[$this->db][$schemaTable]['full_data'] = [];
             }
             $results[$this->db][$schemaTable]['full_data'] = array_merge(
                 $results[$this->db][$schemaTable]['full_data'],
-                $response
+                $response['data']
             );
         }
+        $api->commit();
         $api->close();
         return $results;
     }

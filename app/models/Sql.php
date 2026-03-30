@@ -1,7 +1,7 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -9,23 +9,28 @@
 namespace app\models;
 
 use app\conf\App;
-use app\conf\Connection;
 use app\exceptions\GC2Exception;
 use app\inc\Cache;
+use app\inc\Connection;
 use app\inc\Globals;
 use app\inc\Model;
+use app\inc\TableWalkerRelation;
 use DateInterval;
 use DateTimeImmutable;
+use Error;
 use PDO;
 use PDOException;
 use PhpOffice\PhpSpreadsheet\Reader\Csv;
 use PhpOffice\PhpSpreadsheet\Reader\Exception;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use sad_spirit\pg_wrapper\TypeConverter;
 use sad_spirit\pg_wrapper\types\DateTimeRange;
 use sad_spirit\pg_wrapper\types\Range;
 use sad_spirit\pg_wrapper\Connection as WrapperConnection;
 use ZipArchive;
+use sad_spirit\pg_builder\StatementFactory;
 use sad_spirit\pg_wrapper\converters\DefaultTypeConverterFactory;
+
 
 
 /**
@@ -41,23 +46,30 @@ class Sql extends Model
 
     public Sql $model;
 
-    private const string DEFAULT_TIMESTAMP_FORMAT = 'Y-m-d H:i:s';
-    private const string DEFAULT_TIMESTAMPTZ_FORMAT = 'Y-m-d H:i:s P';
+    private const string DEFAULT_TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.v';
+    private const string DEFAULT_TIMESTAMPTZ_FORMAT = 'Y-m-d\TH:i:s.v\Z';
     private const string DEFAULT_TIME_FORMAT = 'H:i:s';
     private const string DEFAULT_TIMETZ_FORMAT = 'H:i:s P';
     private const string DEFAULT_DATE_FORMAT = 'Y-m-d';
-    private WrapperConnection|null $connection = null;
+    private WrapperConnection|null $wrapperConnection = null;
+
+    private DefaultTypeConverterFactory $defaultTypeConverterFactory;
+    // To hold the converters for the current connection
+    private static array $converters;
 
     /**
      * Sql constructor.
      * @param string $srs
+     * @param Connection|null $connection
      */
-    function __construct(string $srs = "3857")
+    function __construct(string $srs = "3857", ?Connection $connection = null)
     {
-        parent::__construct();
+        parent::__construct(connection: $connection);;
 
         $this->model = $this;
         $this->srs = $srs;
+        $this->defaultTypeConverterFactory = new DefaultTypeConverterFactory();
+        $this->defaultTypeConverterFactory->setConnection($this->getConnection());
     }
 
     /**
@@ -87,11 +99,28 @@ class Sql extends Model
      * @throws GC2Exception
      * @throws \PhpOffice\PhpSpreadsheet\Writer\Exception
      */
-    public function sql(string $q, ?string $clientEncoding = null, ?string $format = "geojson", ?string $geoformat = "wkt", ?bool $csvAllToStr = false, ?string $aliasesFrom = null, ?string $nlt = null, ?string $nln = null, ?bool $convertTypes = false, ?array $parameters = null, ?array $typeHints = null, ?array $typeFormats = null): array
+    public function sql(
+        string $q,
+        ?string $clientEncoding = null,
+        ?string $format = "geojson",
+        ?string $geoformat = "wkt",
+        bool $csvAllToStr = false,
+        ?string $aliasesFrom = null,
+        ?string $nlt = null,
+        ?string $nln = null,
+        bool $convertTypes = false,
+        ?array $parameters = null,
+        ?array $typeHints = null,
+        ?array $typeFormats = null
+    ): array
     {
         // Check params
-        if (is_array($parameters) && array_key_exists(0, $parameters) && is_array($parameters[0])) {
-            throw new GC2Exception("Only JSON objects are accepted in SELECT statements. Not arrays", 406);
+        if (is_array($parameters) && !array_is_list($parameters)) {
+            $parameters = [$parameters];
+        }
+
+        if (is_array($parameters) && count($parameters) > 1) {
+            throw new GC2Exception("Only one set of parameters can be use in SELECT statements.", 406);
         }
 
         if ($format == "excel") {
@@ -107,7 +136,7 @@ class Sql extends Model
         if (sizeof($formatSplit) == 2 && $formatSplit[0] == "ogr") {
             $fileOrFolder = $nln ? $nln . $name : $view;
             $fileOrFolder .= "." . self::toAscii($formatSplit[1], null, "_");
-            $path = App::$param['path'] . "app/tmp/" . Connection::$param["postgisdb"] . "/__vectors/" . $fileOrFolder;
+            $path = App::$param['path'] . "app/tmp/" . $this->connection->database . "/__vectors/" . $fileOrFolder;
             $cmd = "ogr2ogr " .
                 "-mapFieldType Time=String,Binary=String " .
                 "-f \"" . explode("/", $format)[1] . "\" " . $path . " " .
@@ -115,7 +144,7 @@ class Sql extends Model
                 ($nlt ? "-nlt " . $nlt . " " : "") .
                 ($nln ? "-nln " . $nln . " " : "") .
                 "-preserve_fid " .
-                "PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . " user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . Connection::$param["postgisdb"] . "' " .
+                "PG:'host=" . $this->connection->host . " port=" . $this->connection->port . " user=" . $this->connection->user . " password=" . $this->connection->password . " dbname=" . $this->connection->database . "' " .
                 "-sql \"" . $q . "\"";
             exec($cmd . ' 2>&1', $out);
             if ($out) {
@@ -174,10 +203,10 @@ class Sql extends Model
             $select = $this->prepare("select * from ($q) as foo LIMIT 0");
             $convertedParameters = [];
             if ($parameters) {
-                foreach ($parameters as $field => $value) {
-                    $nativeType = $typeHints[$field] ?? 'json';
-                    $formatT = $typeFormats[$field] ?? self::getFormat($nativeType);
-                    $convertedParameters[$field] = $this->convertToNative($nativeType, $value, $formatT);
+                foreach ($parameters[0] as $field => $value) {
+                    $nativePgType = $typeHints[$field] ?? self::phpTypeToPgType(gettype($value)) ?? "json";
+                    $formatT = $typeFormats[$field] ?? self::getFormat($nativePgType);
+                    $convertedParameters[$field] = $this->convertToNative($nativePgType, $value, $formatT);
                 }
                 $this->execute($select, $convertedParameters);
             } else {
@@ -195,6 +224,12 @@ class Sql extends Model
         }
 
         $fieldsArr = [];
+        $string = $q;
+        $walker = new TableWalkerRelation();
+        $factory = new StatementFactory();
+        $select = $factory->createFromString($string);
+        $select->dispatch($walker);
+        $rel = $walker->getRelations()["all"][0] ?? null;
         foreach ($columnTypes as $key => $type) {
             if ($type == "geometry") {
                 if (in_array($format, ["geojson", "ndjson", "json"]) || (($format == "csv" || $format == "excel") && $geoformat == "geojson")) {
@@ -203,23 +238,36 @@ class Sql extends Model
                     $fieldsArr[] = "ST_asText(ST_Transform($ST_Force2D(\"$key\"),$this->srs)) as \"$key\"";
                 }
             } elseif ($type == "bytea") {
-                $fieldsArr[] = "encode(\"$key\",'base64') as \"$key\"";
+                if (!empty(App::$param['convertDataUrlsToHttp']) && $rel) {
+                    // Convert data URLs to HTTP. Read the first bytes to get the mimetype.
+                    $priKeyName = $this->getPrimeryKey($rel)['attname'];
+                    $rowValue = App::$param['host'] . "/api/v1/decodeimg/" . $this->postgisdb . "/" . str_replace('"', '', $rel) . "/" . $key . "/";
+                    $fieldsArr[] = "'$rowValue'||$priKeyName||'?mimetype='||SPLIT_PART(SPLIT_PART(encode(substring(\"$key\" from 0 for 100),'escape'),';',1),':',2) as \"$key\"";
+                } else {
+//                    $fieldsArr[] = "\"$key\"";
+                    $fieldsArr[] = "encode(\"$key\",'escape') as \"$key\"";
+                }
+            } elseif ($type == "_bytea") {
+                if (!empty(App::$param['convertDataUrlsToHttp']) && $rel) {
+                    // Convert data URLs to HTTP. Read the first bytes to get the mimetype.
+                    $priKeyName = $this->getPrimeryKey($rel)['attname'];
+                    $rowValue = App::$param['host'] . "/api/v1/decodeimg/" . $this->postgisdb . "/" . str_replace('"', '', $rel) . "/" . $key . "/";
+                    $fieldsArr[] = "(SELECT (array_agg('$rowValue' || $priKeyName || '/' || (i - 1) || '?mimetype=' || SPLIT_PART(SPLIT_PART(encode(substring(f from 0 for 100), 'escape'), ';', 1), ':', 2))) FROM unnest(\"$key\") WITH ORDINALITY AS t(f, i)) as \"$key\"";
+                } else {
+                    $fieldsArr[] = "\"$key\"";
+                }
             } else {
                 $fieldsArr[] = "\"$key\"";
             }
         }
         $fieldsStr = implode(",", $fieldsArr);
         $sql = "SELECT $fieldsStr FROM ($q) AS foo LIMIT $limit";
-        $this->begin();
         // Settings from App.php
         if (!empty(App::$param["SqlApiSettings"]["work_mem"])) {
             $this->execQuery("SET work_mem TO '" . App::$param["SqlApiSettings"]["work_mem"] . "'");
         }
         $this->execQuery("SET LOCAL statement_timeout = " . (App::$param["SqlApiSettings"]["statement_timeout"] ?? "60000"));
         $this->execQuery("SET LOCAL idle_in_transaction_session_timeout = 300000");
-        if ($clientEncoding) {
-            $this->execQuery("set client_encoding='$clientEncoding'");
-        }
         if ($clientEncoding) {
             $this->execQuery("set client_encoding='$clientEncoding'");
         }
@@ -242,14 +290,14 @@ class Sql extends Model
             while ($this->execute($innerStatement) && $row = $this->fetchRow($innerStatement)) {
                 $arr = [];
                 foreach ($row as $key => $rowValue) {
-                    $nativeType = $columnTypes[$key];
-                    if ($nativeType == "geometry" && $rowValue !== null) {
+                    $nativePgType = $columnTypes[$key];
+                    if (($nativePgType == "geometry" || $nativePgType == "json" || $nativePgType == "jsonb") && $rowValue !== null) {
                         $rowValue = json_decode($rowValue);
                     } else {
                         if ($convertTypes) {
                             try {
-                                $dateTimeFormat = $typeFormats[$key] ?? self::getFormat($nativeType);
-                                $rowValue = $this->convertFromNative($nativeType, $rowValue, $dateTimeFormat);
+                                $dateTimeFormat = $typeFormats[$key] ?? self::getFormat($nativePgType);
+                                $rowValue = $this->convertFromNative($nativePgType, $rowValue, $dateTimeFormat);
                             } catch (\Exception) {
                                 // Pass
                             }
@@ -260,7 +308,6 @@ class Sql extends Model
                 $features[] = $arr;
             }
             $this->execQuery("CLOSE curs");
-            $this->commit();
             foreach ($columnTypes as $key => $type) {
                 $schema[$key] = [
                     "type" => ltrim($type, '_'),
@@ -285,14 +332,16 @@ class Sql extends Model
             while ($this->execute($innerStatement) && $row = $this->fetchRow($innerStatement)) {
                 $arr = array();
                 foreach ($row as $key => $rowValue) {
-                    $nativeType = $columnTypes[$key];
-                    if ($nativeType == "geometry" && $rowValue !== null) {
+                    $nativePgType = $columnTypes[$key];
+                    if ($nativePgType == "geometry" && $rowValue !== null) {
                         $geometries[] = json_decode($rowValue);
+                    } elseif (($nativePgType == "json" || $nativePgType == "jsonb") && $rowValue !== null) {
+                        $arr = $this->array_push_assoc($arr, $key, json_decode($rowValue));
                     } else {
                         if ($convertTypes) {
                             try {
-                                $dateTimeFormat = $typeFormats[$key] ?? self::getFormat($nativeType);
-                                $rowValue = $this->convertFromNative($nativeType, $rowValue, $dateTimeFormat);
+                                $dateTimeFormat = $typeFormats[$key] ?? self::getFormat($nativePgType);
+                                $rowValue = $this->convertFromNative($nativePgType, $rowValue, $dateTimeFormat);
                             } catch (\Exception) {
                                 // Pass
                             }
@@ -336,7 +385,7 @@ class Sql extends Model
                 foreach ($row as $key => $value) {
                     if ($columnTypes[$key] == "geometry" && $value !== null) {
                         $geometries[] = json_decode($value);
-                    } elseif ($columnTypes[$key] == "json" || $columnTypes[$key] == "jsonb" && $value !== null) {
+                    } elseif (($columnTypes[$key] == "json" || $columnTypes[$key] == "jsonb") && $value !== null) {
                         $arr = $this->array_push_assoc($arr, $key, json_decode($value));
                     } else {
                         $arr = $this->array_push_assoc($arr, $key, $value);
@@ -542,18 +591,19 @@ class Sql extends Model
         }
 
         $columnTypes = [];
+        $schema = [];;
         $convertedParameters = [];
         // Convert JSON to native types
         if ($parameters) {
             foreach ($parameters as $parameter) {
                 $paramTmp = [];
                 foreach ($parameter as $field => $value) {
-                    $nativeType = $typeHints[$field] ?? 'json';
-                    $format = $typeFormats[$field] ?? self::getFormat($nativeType);
-                    if (!self::getFormat($nativeType) && !empty($format)) {
+                    $nativePgType = $typeHints[$field] ?? self::phpTypeToPgType(gettype($value)) ?? "json";
+                    $format = $typeFormats[$field] ?? self::getFormat($nativePgType);
+                    if (!self::getFormat($nativePgType) && !empty($format)) {
                         throw new GC2Exception("Format is only supported for date/time (range) type. 'type_hints' must be set if 'type_formats' are used for input values.", 400, null, 'BAD_REQUEST');
                     }
-                    $paramTmp[$field] = $this->convertToNative($nativeType, $value, $format);
+                    $paramTmp[$field] = $this->convertToNative($nativePgType, $value, $format);
                 }
                 $convertedParameters[] = $paramTmp;
             }
@@ -562,7 +612,6 @@ class Sql extends Model
         $affectedRows = 0;
         $result = $this->prepare($q);
         if (sizeof($convertedParameters) > 0) {
-            $this->begin();
             foreach ($convertedParameters as $parameter) {
                 $this->execute($result, $parameter);
                 if (count($columnTypes) == 0) {
@@ -575,30 +624,39 @@ class Sql extends Model
                             break;
                         }
                         $columnTypes[$meta['name']] = $meta['native_type'];
+                        $schema[$meta['name']] = ['type' => $meta['native_type'], 'array' => str_starts_with($meta['native_type'], '_')];
                     }
                 }
-                $row = $this->fetchRow($result);
-                $tmp = null;
-                foreach ($row as $field => $value) {
-                    try {
-                        $nativeType = $typeHints[$field] ?? 'json';
-                        $dateTimeFormat = $typeFormats[$field] ?? self::getFormat($nativeType);
-                        $convertedValue = $this->convertFromNative($columnTypes[$field], $value, $dateTimeFormat);
-                        $tmp[$field] = $convertedValue;
-                    } catch (\Exception) {
-                        if ($columnTypes[$field] == 'geometry') {
-                            $resultGeom = $this->prepare("select ST_AsGeoJSON(:v) as json");
-                            $this->execute($resultGeom, ["v" => $value]);
-                            $json = $this->fetchRow($resultGeom)['json'];
-                            $value = !empty($json) ? json_decode($json) : null;
+                $rows = $this->fetchAll($result, 'assoc');
+                if (!empty($rows)) {
+                    $tmp = null;
+                    foreach ($rows as $row) {
+                        foreach ($row as $field => $value) {
+                            try {
+                                $nativePgType = $typeHints[$field] ?? self::phpTypeToPgType(gettype($value)) ?? "json";
+                                $dateTimeFormat = $typeFormats[$field] ?? self::getFormat($nativePgType);
+                                $convertedValue = $this->convertFromNative($columnTypes[$field], $value, $dateTimeFormat);
+                                $tmp[$field] = $convertedValue;
+                            } catch (\Exception) {
+                                if ($columnTypes[$field] == 'geometry') {
+                                    $resultGeom = $this->prepare("select ST_AsGeoJSON(:v) as json");
+                                    $this->execute($resultGeom, ["v" => $value]);
+                                    $json = $this->fetchRow($resultGeom)['json'];
+                                    $value = !empty($json) ? json_decode($json) : null;
+                                }
+                                $tmp[$field] = $value;
+                            }
+
                         }
-                        $tmp[$field] = $value;
+                        if ($tmp && sizeof($tmp) > 0) {
+                            $returning['data'][] = $tmp;
+                        }
                     }
-                }
-                if ($tmp && sizeof($tmp) > 0) {
-                    $returning[] = $tmp;
                 }
                 $affectedRows += $result->rowCount();
+                if ($returning) {
+                    $returning['schema'] = $schema;
+                }
             }
         } else {
             $this->execute($result);
@@ -619,8 +677,8 @@ class Sql extends Model
                     $tmp = null;
                     foreach ($row as $field => $value) {
                         try {
-                            $nativeType = $typeHints[$field] ?? 'json';
-                            $dateTimeFormat = $typeFormats[$field] ?? self::getFormat($nativeType);
+                            $nativePgType = $typeHints[$field] ?? self::phpTypeToPgType(gettype($value)) ?? "json";
+                            $dateTimeFormat = $typeFormats[$field] ?? self::getFormat($nativePgType);
                             $convertedValue = $this->convertFromNative($columnTypes[$field], $value, $dateTimeFormat);
                             $tmp[$field] = $convertedValue;
                         } catch (\Exception) {
@@ -666,18 +724,33 @@ class Sql extends Model
     public function insertCost(string $q, string $username, $convertedParameters): void
     {
         // Get total cost and insert in cost
+        $factor = 0.001;
         $cost = 0;
         $ex = "EXPLAIN (format json) $q";
         $res = $this->prepare($ex);
         $this->execute($res, $convertedParameters);;
         $plan = $res->fetchAll();
         if (isset($plan[0]['QUERY PLAN'])) {
-            $cost = json_decode($plan[0]['QUERY PLAN'], true)[0]['Plan']['Total Cost'];
+            $cost = (float)json_decode($plan[0]['QUERY PLAN'], true)[0]['Plan']['Total Cost'];
+            $cost = $cost * $factor;
         }
         $ex = "INSERT INTO settings.cost (username, statement, cost) VALUES (:username, :statement, :cost)";
         $res = $this->prepare($ex);
         $q = str_replace("\n", " ", $q);
         $this->execute($res, ['username' => $username, 'statement' => $q, 'cost' => $cost]);
+    }
+
+    private function getConverterForTypeSpecification(string $type): ?TypeConverter
+    {
+        if (empty(self::$converters[$type])) {
+            $this->setConverterForTypeSpecification($type);
+        }
+        return self::$converters[$type];
+    }
+
+    private function setConverterForTypeSpecification(string $type): void
+    {
+        self::$converters[$type] = $this->defaultTypeConverterFactory->getConverterForTypeSpecification($type);
     }
 
 
@@ -691,8 +764,8 @@ class Sql extends Model
      */
     private function convertFromNative(string $nativeType, ?string $value, ?string $format): mixed
     {
-//        $newValue = (new DefaultTypeConverterFactory())->setConnection($this->getConnection())->getConverterForTypeSpecification($nativeType)->input($value);
-        $newValue = (new DefaultTypeConverterFactory())->getConverterForTypeSpecification($nativeType)->input($value);
+        $convertor = $this->getConverterForTypeSpecification($nativeType);;
+        $newValue = $convertor->input($value);
         if (is_array($newValue)) {
             $newValue = self::processArray($newValue, fn($i, $format) => $this->convertPhpTypes($i, $format), $format);
         } else {
@@ -707,12 +780,12 @@ class Sql extends Model
      *
      * @param string $nativeType The native type to which the value needs to be converted.
      * @param mixed $value The value to be converted.
-     * @return string The converted value in its native type.
+     * @param string|null $format
+     * @return string|null The converted value in its native type.
      * @throws GC2Exception
      */
-    private function convertToNative(string $nativeType, mixed $value, ?string $format): string
+    private function convertToNative(string $nativeType, mixed $value, ?string $format): ?string
     {
-        $factory = (new DefaultTypeConverterFactory())->setConnection($this->getConnection());
         $type = gettype($value);
         $format = $format ?? self::getFormat($nativeType);
 
@@ -724,6 +797,9 @@ class Sql extends Model
                 if (in_array($nativeType, ['daterange[]', 'tsrange[]', 'tstzrange[]'])) {
                     $value = self::processArray($value, fn($i, $format) => $this->convertDateTimeRange($i, $format), $format);
                 }
+                if ($nativeType == 'bytea[]' || $nativeType == '_bytea') {
+                    $value = self::processArray($value, fn($i) => base64_decode($i), $format);
+                }
                 if ($nativeType == 'interval') {
                     $value = $this->convertInterval($value);
                 }
@@ -733,17 +809,18 @@ class Sql extends Model
                 if (in_array($nativeType, ['numrange[]', 'int4range[]', 'int8range[]'])) {
                     $value = self::processArray($value, fn($i) => new Range(...$i), $format);
                 }
-                $nativeValue = $factory->getConverterForTypeSpecification($nativeType)->output($value);
+                $convertor = $this->getConverterForTypeSpecification($nativeType);
+                $nativeValue = $convertor->output($value);
             } catch (\Exception $e) {
                 throw new GC2Exception($e->getMessage(), 406, null, "VALUE_PARSE_ERROR");
             }
             $paramTmp = $nativeValue;
         } elseif ($type == 'boolean') {
-            $nativeValue = $factory->getConverterForTypeSpecification($type)->output($value);
+            $nativeValue = $this->getConverterForTypeSpecification($type)->output($value);
             $paramTmp = $nativeValue;
         } elseif ($nativeType == 'bytea') {
             $value = base64_decode($value);
-            $nativeValue = $factory->getConverterForTypeSpecification('bytea')->output($value);
+            $nativeValue = $this->getConverterForTypeSpecification('bytea')->output($value);
             $paramTmp = $nativeValue;
         } // In the case of date/time. Else $format will be null
         elseif ($format) {
@@ -751,7 +828,7 @@ class Sql extends Model
             if (!$dateTime) {
                 throw new GC2Exception("Could not format date/time value '$value' with '$format'", 406, null, "VALUE_PARSE_ERROR");
             }
-            $nativeValue = $factory->getConverterForTypeSpecification($nativeType)->output($dateTime);
+            $nativeValue = $this->getConverterForTypeSpecification($nativeType)->output($dateTime);
             $paramTmp = $nativeValue;
         } else {
             $paramTmp = $value;
@@ -817,6 +894,12 @@ class Sql extends Model
             $tmp['upperInclusive'] = $value->upperInclusive;
             $value = $tmp;
         }
+        if (is_resource($value)) {
+            $value = base64_encode(stream_get_contents($value));
+        }
+        if (is_string($value) && !mb_check_encoding($value, 'UTF-8')) {
+            $value = base64_encode($value);
+        }
         return $value;
     }
 
@@ -868,6 +951,16 @@ class Sql extends Model
         };
     }
 
+    public static function phpTypeToPgType(string $phpType): ?string
+    {
+        return match ($phpType) {
+            'string' => "varchar",
+            'double' => "numeric",
+            'integer' => "bigint",
+            default => null,
+        };
+    }
+
     /**
      * Establishes and returns a new connection to the PostgreSQL database.
      *
@@ -875,10 +968,10 @@ class Sql extends Model
      */
     private function getConnection(): WrapperConnection
     {
-        if (!$this->connection) {
-            $this->connection = new WrapperConnection("host=$this->postgishost user=$this->postgisuser dbname=$this->postgisdb password=$this->postgispw port=$this->postgisport");
+        if (!$this->wrapperConnection) {
+            $this->wrapperConnection = new WrapperConnection("host={$this->connection->host} user={$this->connection->user} dbname={$this->connection->database} password={$this->connection->password} port={$this->connection->port}");
         }
-        return $this->connection;
+        return $this->wrapperConnection;
     }
 }
 

@@ -8,15 +8,12 @@
 
 namespace app\inc;
 
-use app\api\v2\Sql;
 use app\conf\App;
-use app\conf\Connection;
 use app\exceptions\GC2Exception;
 use app\exceptions\ServiceException;
-use app\models\Database;
 use app\models\Layer;
 use app\models\Setting;
-use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
+use Psr\Cache\InvalidArgumentException;
 
 /**
  * Class Controller
@@ -34,10 +31,12 @@ class Controller
      */
     protected ?string $sUser;
 
+    const string USED_RELS_KEY = "checked_relations";
+
     /**
      * Controller constructor.
      */
-    function __construct()
+    function __construct(public Connection $connection = new Connection())
     {
         $this->response = [];
     }
@@ -68,7 +67,7 @@ class Controller
     {
         $response = [];
         $prop = $_SESSION['usergroup'] ?: $_SESSION['screen_name'];
-        if (($_SESSION["subuser"] && $prop == Connection::$param['postgisschema']) && !$neverAllowSubUser) {
+        if (($_SESSION["subuser"] && $prop == $this->connection->schema) && !$neverAllowSubUser) {
             $response['success'] = true;
         } elseif ($_SESSION["subuser"]) {
             $text = "You don't have privileges to do this. Please contact the database owner, who can grant you privileges.";
@@ -108,7 +107,7 @@ class Controller
         }
         global $postgisdb;
         $postgisdb = $user;
-        $settings = new Setting();
+        $settings = new Setting(connection: $this->connection);
         $res = $settings->get();
         $apiKey = $res['data']->api_key;
         if ($apiKey == $key && $key) {
@@ -125,11 +124,10 @@ class Controller
      */
     public function basicHttpAuthLayer(string $layer, string $db): void
     {
-        Database::setDb($db);
-        $postgisObject = new Model();
+        $postgisObject = new Model(connection: $this->connection);
         $auth = $postgisObject->getGeometryColumns($layer, "authentication");
         if ($auth == "Read/write" || !empty(Input::getAuthUser())) {
-            (new BasicAuth())->authenticate($layer, false);
+            (new BasicAuth(connection: $this->connection))->authenticate($layer, false);
         }
     }
 
@@ -140,6 +138,7 @@ class Controller
      * @param string|null $subUser
      * @param string|null $inputApiKey
      * @return array|null
+     * @throws InvalidArgumentException
      */
     public function ApiKeyAuthLayer(string $layer, bool $transaction, array $rels, ?string $subUser = null, ?string $inputApiKey = null): ?array
     {
@@ -154,8 +153,8 @@ class Controller
             $unQualifiedName = $bits[1];
         }
 
-        $postgisObject = new Model();
-        $settings = new Setting();
+        $postgisObject = new Model(connection: $this->connection);
+        $settings = new Setting(connection: $this->connection);
         $response = $settings->get();
         $userGroup = $response["data"]->userGroups->$subUser ?? null;
         if ($subUser) {
@@ -167,9 +166,9 @@ class Controller
 
         $check = false;
         if (!empty($_SESSION["auth"])) {
-            if ($subUser && $subUser == $_SESSION["screen_name"] && $_SESSION["parentdb"] == Connection::$param["postgisdb"]) {
+            if ($subUser && $subUser == $_SESSION["screen_name"] && $_SESSION["parentdb"] == $this->connection->database) {
                 $check = true;
-            } elseif (!$subUser && $_SESSION["screen_name"] == Connection::$param["postgisdb"]) {
+            } elseif (!$subUser && $_SESSION["screen_name"] == $this->connection->database) {
                 $check = true;
             }
         }
@@ -211,7 +210,7 @@ class Controller
                     if ($isAuth) {
                         $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser];
                         $response['session'] = $session;
-                        $response[Sql::USEDRELSKEY] = $rels;
+                        $response[self::USED_RELS_KEY] = $rels;
                         switch ($transaction) {
                             case false:
                                 if ((empty($privileges[$userGroup ?: $subUser]) || (!empty($privileges[$userGroup ?: $subUser]) && $privileges[$userGroup ?: $subUser] == "none")) && ($subUser != $schema && $userGroup != $schema)) {
@@ -241,7 +240,7 @@ class Controller
                                 break;
                         }
                     } else {
-                        $response[Sql::USEDRELSKEY] = $rels;
+                        $response[self::USED_RELS_KEY] = $rels;
                         $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser];
                         $response['session'] = $session;
 
@@ -256,7 +255,7 @@ class Controller
                     }
                 } else {
                     $response['auth_level'] = $auth;
-                    $response[Sql::USEDRELSKEY] = $rels;
+                    $response[self::USED_RELS_KEY] = $rels;
                     $response['session'] = $session;
 
                     if ($auth == "Read/write" || ($transaction)) {
@@ -280,7 +279,7 @@ class Controller
             $response3['session'] = $session;
             $response3['auth_level'] = $auth;
             $response3['is_auth'] = $isAuth;
-            $response3[Sql::USEDRELSKEY] = $rels;
+            $response3[self::USED_RELS_KEY] = $rels;
             return $response3;
         }
         return null;

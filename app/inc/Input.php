@@ -19,7 +19,7 @@ class Input
      * @var array<string>
      */
     static ?array $params = null;
-    static ?string $body;
+    static ?string $body = null;
     const string TEXT_PLAIN = "text/plain";
     const string APPLICATION_JSON = "application/json";
     const string APPLICATION_X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded";
@@ -28,15 +28,11 @@ class Input
     /**
      *
      * @param array<string> $arr
+     * DEPRECATED
      */
     public static function setParams(?array $arr): void
     {
         self::$params = $arr;
-    }
-
-    public static function setBody(?string $body): void
-    {
-        self::$body = $body;
     }
 
     /**
@@ -94,6 +90,14 @@ class Input
     }
 
     /**
+     * @return bool
+     */
+    public static function getDryRun(): bool
+    {
+        return $_SERVER['HTTP_X_DRY_RUN'] ?? false;
+    }
+
+    /**
      * @return string|null
      */
     public static function getJwtToken(): ?string
@@ -114,16 +118,15 @@ class Input
      * @param bool $decode
      * @return string|null
      */
-    public static function getBody(bool $decode = true): ?string
+    public static function getBody(bool $decode = false): ?string
     {
-
-        if (!empty(self::$body)) {
-            return self::$body;
-        }
-
         $content = file_get_contents('php://input');
         if (empty($content)) {
             return null;
+        }
+        // Hack to support + in URL encoded data
+        if (str_contains($content, '%2B')) {
+            $content = str_replace('%2B', '+', $content);
         }
         if ($decode) {
             return urldecode($content);
