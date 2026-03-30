@@ -269,7 +269,7 @@ class OpenId extends Component {
     render() {
         const {savedDb, info, superuserLogin, processing} = this.state
         const containerStyle = {
-            maxWidth: 420,
+            width: 420,
             margin: '60px auto',
             padding: 24,
             borderRadius: 12,
@@ -326,7 +326,7 @@ class OpenId extends Component {
                         </div>
                         {savedDb ? (
                             <div style={badgeStyle}>
-                                <FormattedMessage
+                                <FormattedMessage 
                                     id="Current selection"
                                     values={{db: savedDb, superuser: superuserLogin === '1' ? '(super)' : ''}}
                                 />
@@ -363,50 +363,50 @@ class OpenId extends Component {
                                     {this.state.allowedDatabases
                                         .filter(d => d.toLowerCase().includes(this.state.searchTerm.toLowerCase()))
                                         .map(d => (
-                                            <div key={d} style={{
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'space-between',
-                                                padding: '10px 12px',
-                                                background: this.state.selectedOption === d ? '#eff6ff' : 'transparent',
-                                                borderBottom: '1px solid #f3f4f6',
-                                                transition: 'background 0.15s'
-                                            }}
-                                                 onMouseEnter={(e) => {
-                                                     if (this.state.selectedOption !== d) {
-                                                         e.currentTarget.style.background = '#f9fafb'
-                                                     }
-                                                 }}
-                                                 onMouseLeave={(e) => {
-                                                     if (this.state.selectedOption !== d) {
-                                                         e.currentTarget.style.background = 'transparent'
-                                                     }
-                                                 }}>
-                                                <label style={{cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center'}}>
+                                        <div key={d} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            padding: '10px 12px',
+                                            background: this.state.selectedOption === d ? '#eff6ff' : 'transparent',
+                                            borderBottom: '1px solid #f3f4f6',
+                                            transition: 'background 0.15s'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (this.state.selectedOption !== d) {
+                                                e.currentTarget.style.background = '#f9fafb'
+                                            }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (this.state.selectedOption !== d) {
+                                                e.currentTarget.style.background = 'transparent'
+                                            }
+                                        }}>
+                                            <label style={{cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center'}}>
+                                                <input
+                                                    type="radio"
+                                                    name="db"
+                                                    value={d}
+                                                    checked={this.state.selectedOption === d}
+                                                    onChange={this.handleDbSelectChange}
+                                                    style={{marginRight: 8}}
+                                                />
+                                                {d}
+                                            </label>
+                                            {this.state.databasesWithSuperuser.includes(d) && (
+                                                <label style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: '#6b7280'}}
+                                                    onClick={(e) => e.stopPropagation()}>
                                                     <input
-                                                        type="radio"
-                                                        name="db"
-                                                        value={d}
-                                                        checked={this.state.selectedOption === d}
-                                                        onChange={this.handleDbSelectChange}
-                                                        style={{marginRight: 8}}
+                                                        type="checkbox"
+                                                        checked={!!this.state.superuserSelections[d]}
+                                                        onChange={(e) => this.handleDatabaseSuperuserToggle(d, e.target.checked)}
+                                                        onClick={(e) => e.stopPropagation()}
                                                     />
-                                                    {d}
+                                                    <span><FormattedMessage id="Superuser" /></span>
                                                 </label>
-                                                {this.state.databasesWithSuperuser.includes(d) && (
-                                                    <label style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: '#6b7280'}}
-                                                           onClick={(e) => e.stopPropagation()}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={!!this.state.superuserSelections[d]}
-                                                            onChange={(e) => this.handleDatabaseSuperuserToggle(d, e.target.checked)}
-                                                            onClick={(e) => e.stopPropagation()}
-                                                        />
-                                                        <span><FormattedMessage id="Superuser" /></span>
-                                                    </label>
-                                                )}
-                                            </div>
-                                        ))}
+                                            )}
+                                        </div>
+                                    ))}
                                     {this.state.allowedDatabases.filter(d => d.toLowerCase().includes(this.state.searchTerm.toLowerCase())).length === 0 && (
                                         <div style={{padding: '10px 12px', color: '#6b7280', fontSize: 14}}>
                                             <FormattedMessage id="No databases found" />

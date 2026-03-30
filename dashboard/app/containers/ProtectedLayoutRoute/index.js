@@ -45,7 +45,9 @@ class ProtectedLayout extends React.Component {
                 </StyledButtonLink>);
 
                 let helpButton = (
-                    <HelpModal/>
+                    <Button color="inherit" onClick={() => window.open('https://dokumentation.geopartner.dk', '_blank')}>
+                        <HelpIcon style={{marginRight: `6px`}}/>
+                    </Button>
                 );
 
                 if (this.props.user.passwordExpired) {
@@ -73,6 +75,11 @@ class ProtectedLayout extends React.Component {
                                         </div>
                                         <div style={{display: `inline-block`, paddingRight: `20px`}}>
                                             {helpButton}
+                                        </div>
+                                        <div style={{display: `inline-block`}}>
+                                            <Button color="inherit" onClick={() => this.props.history.push(prefix + "sign-in")}>
+                                                <FormattedMessage id="Change database"/>
+                                            </Button>
                                         </div>
                                         <div style={{display: `inline-block`}}>
                                             <Button color="inherit" onClick={this.props.onSignOut}>
@@ -125,6 +132,7 @@ const mapStateToProps = createStructuredSelector({
 export function mapDispatchToProps(dispatch) {
     return {
         onSignOut: () => dispatch(signOut()),
+        onChangeDatabase: () => dispatch(changeDatabase())
     };
 }
 
