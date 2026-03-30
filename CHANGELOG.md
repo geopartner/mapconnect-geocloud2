@@ -7,6 +7,7 @@ and this project adheres to [CalVer](https://calver.org/).
 
 ## [Additions]
 
+
 ### Added
 - WFS now supports GeoJSON as output format.
 
