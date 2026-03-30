@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
- * @copyright  2025 Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -13,33 +12,20 @@ error_reporting(E_ERROR | E_WARNING | E_PARSE | E_DEPRECATED | E_USER_DEPRECATED
 //error_reporting(E_ALL);
 ob_start("ob_gzhandler");
 
-use app\api\v3\Meta;
-use app\api\v4\Call;
-use app\api\v4\Client;
-use app\api\v4\Column;
-use app\api\v4\Constraint;
-use app\api\v4\Commit;
-use app\api\v4\Geofence;
-use app\api\v4\Import;
-use app\api\v4\Index;
-use app\api\v4\Method;
-use app\api\v4\Oauth;
-use app\api\v4\Privilege;
-use app\api\v4\Schema;
-use app\api\v4\Sql;
-use app\api\v4\Stat;
-use app\api\v4\Table;
-use app\api\v4\User;
+use app\api\v4\Controller;
+use app\api\v4\Scope;
 use app\conf\App;
 use app\conf\Connection;
 use app\controllers\Wms;
 use app\exceptions\GC2Exception;
+use app\exceptions\GraphQLException;
 use app\exceptions\OwsException;
 use app\exceptions\RPCException;
 use app\exceptions\ServiceException;
 use app\inc\Cache;
 use app\inc\Input;
 use app\inc\Jwt;
+use app\inc\RateLimiter;
 use app\inc\Redirect;
 use app\inc\Response;
 use app\inc\Route;
@@ -125,22 +111,30 @@ register_shutdown_function(function () {
 // Setup Cache
 Cache::setInstance();
 
+function setHeaders(): void
+{
+    // TODO tjek header is set
+    // Write Access-Control-Allow-Origin if origin is white listed
+    $http_origin = $_SERVER['HTTP_ORIGIN'] ?? null;
+    if (isset(App::$param["AccessControlAllowOrigin"]) && in_array($http_origin, App::$param["AccessControlAllowOrigin"])) {
+        header("Access-Control-Allow-Origin: " . $http_origin);
+    } elseif (isset(App::$param["AccessControlAllowOrigin"]) && App::$param["AccessControlAllowOrigin"][0] == "*") {
+        header("Access-Control-Allow-Origin: *");
+    }
+    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control");
+    header("Access-Control-Allow-Credentials: true");
+    header("Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS");
+}
+
 // Setup host
 App::$param['protocol'] = App::$param['protocol'] ?? Util::protocol();
 App::$param['host'] = App::$param['host'] ?? App::$param['protocol'] . "://" . $_SERVER['SERVER_NAME'] . ($_SERVER['SERVER_PORT'] != "80" && $_SERVER['SERVER_PORT'] != "443" ? ":" . $_SERVER["SERVER_PORT"] : "");
 App::$param['userHostName'] = App::$param['userHostName'] ?? App::$param['host'];
 
-// Globally write Access-Control-Allow-Origin if origin is white listed
-$http_origin = $_SERVER['HTTP_ORIGIN'] ?? null;
-if (isset(App::$param["AccessControlAllowOrigin"]) && in_array($http_origin, App::$param["AccessControlAllowOrigin"])) {
-    header("Access-Control-Allow-Origin: " . $http_origin);
-} elseif (isset(App::$param["AccessControlAllowOrigin"]) && App::$param["AccessControlAllowOrigin"][0] == "*") {
-    header("Access-Control-Allow-Origin: *");
-}
-
-// Handle OWS outside handler handler function
+// Handle OWS outside handler function
 try {
     if (Input::getPath()->part(1) == "wfs") {
+        setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) {
             Session::start();
         }
@@ -155,6 +149,7 @@ try {
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
+        setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
             Session::start();
         }
@@ -169,15 +164,46 @@ try {
     flush();
 }
 
-// Start routing
-$handler = static function () {
-    // Set Remainder of CORS headers for internals
-    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control, GC2-API-KEY");
-    header("Access-Control-Allow-Credentials: true");
-    header("Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS");
-
+// Collect all Route2 routes
+$routes = [];
+foreach (glob(dirname(__FILE__) . "/../app/auth/api/controllers/*.php") as $filename) {
+    $className = 'app\\auth\\api\\controllers\\' . basename($filename, '.php');
     try {
-        if (Input::getPath()->part(1) == "api") {
+        $rc = new ReflectionClass($className);
+        $classAttrs = $rc->getAttributes();
+        foreach ($classAttrs as $attribute) {
+            $listener = $attribute->newInstance();
+            if ($listener::class == Controller::class) {
+                $routes[$className] = $listener;
+            }
+
+        }
+    } catch (ReflectionException) {
+        // We skip not class files
+    }
+}
+foreach (glob(dirname(__FILE__) . "/../app/api/v4/controllers/*.php") as $filename) {
+    $className = 'app\\api\\v4\\controllers\\' . basename($filename, '.php');
+    try {
+        $rc = new ReflectionClass($className);
+        $classAttrs = $rc->getAttributes();
+        foreach ($classAttrs as $attribute) {
+            $listener = $attribute->newInstance();
+            if ($listener::class == Controller::class) {
+                $routes[$className] = $listener;
+            }
+
+        }
+    } catch (ReflectionException) {
+        // We skip not class files
+    }
+}
+
+// Start routing
+$handler = static function () use ($routes) {
+    setHeaders();
+    try {
+        if (in_array(Input::getPath()->part(1), ['api', 'auth', 'signin', 'signup', 'signout', 'forgot', 'activation', 'device', 'github'])) {
 
             if ($db = Input::getPath()->part(4)) {
                 Database::setDb($db); // Default
@@ -318,7 +344,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -329,7 +355,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -340,7 +366,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -351,7 +377,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb("gc2scheduler");
                 } else {
@@ -363,7 +389,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -393,7 +419,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -404,7 +430,7 @@ $handler = static function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
                 } else {
@@ -412,174 +438,36 @@ $handler = static function () {
                 }
             });
 
+            if (headers_sent()) {
+                return;
+            }
             //==========================
             // V4 with OAuth and Route2
             //==========================
-            Route2::add("api/v4/oauth", new Oauth(), function () {
-                Database::setDb("mapcentia");
-            });
-            Route2::add("api/v4/oauth/(action)", new Oauth());
-
-            Route2::add("api/v4/schemas/[schema]", new Schema(), function () {
+            $Route2 = new Route2();
+            // Rate limit per JWT token for all API v4 routes
+            RateLimiter::consumeForJwt(Input::getJwtToken(), App::$param['apiV4']['rateLimitPerMinute'] ?? 120);
+            // First, go through PUBLIC routes before validating the token
+            foreach ($routes as $c => $r) {
+                if ($r->getScope() == Scope::PUBLIC) {
+                    $Route2->add($r->getRoute(), new $c($Route2, new \app\inc\Connection()));
+                }
+            }
+            // Then go through non-PUBLIC routes
+            if (!$Route2->isMatched) {
                 $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
+                $Route2->jwt = $jwt;
+                $conn = new \app\inc\Connection(user: $jwt["data"]["uid"], database: $jwt["data"]["database"]);
+                foreach ($routes as $c => $r) {
+                    if ($r->getScope() != Scope::PUBLIC) {
+                        $Route2->add($r->getRoute(), new $c($Route2, $conn));
                     }
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
                 }
-            });
-
-            Route2::add("api/v4/schemas/{schema}/tables/[table]", new Table(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/schemas/{schema}/tables/{table}/columns/[column]", new Column(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-
-            Route2::add("api/v4/schemas/{schema}/tables/{table}/indices/[index]", new Index(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-
-            Route2::add("api/v4/schemas/{schema}/tables/{table}/constraints/[constraint]", new Constraint(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/users/[user]", new User(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/schemas/{schema}/tables/{table}/privileges", new Privilege(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/rules/[id]", new Geofence(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
-                    }
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/sql", new Sql(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/sql/(database)/{database}", new Sql(), function () {
-            });
-
-            Route2::add("api/v4/methods/[id]", new Method(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/call", new Call(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v3/meta/[query]", new Meta(), function () {
-                $jwt = Jwt::validate();
-                Database::setDb($jwt["data"]["database"]);
-            });
-
-            Route2::add("api/v4/import/{schema}/[file]", new Import(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/clients/[id]", new Client(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
-                    }
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/stats", new Stat(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
-                    }
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-
-            Route2::add("api/v4/commit", new Commit(), function () {
-                $jwt = Jwt::validate();
-                if ($jwt["success"]) {
-                    if (!$jwt["data"]["superUser"]) {
-                        echo Response::toJson(Response::SUPER_USER_ONLY);
-                    }
-                    Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
-                }
-            });
-            Route::miss();
+            }
+            if ($Route2->isMatched) {
+                return;
+            }
+            $Route2->miss();
 
         } elseif (Input::getPath()->part(1) == "admin") {
             Session::start();
@@ -641,29 +529,33 @@ $handler = static function () {
             }
             Route::miss();
         }
-    } catch (GC2Exception $exception) {
+    } catch (PDOException|GC2Exception $exception) {
         $response["success"] = false;
         $response["message"] = $exception->getMessage();
         $response["code"] = $exception->getCode();
         $response["errorCode"] = $exception->getErrorCode();
-        echo Response::toJson($response);
+        if (getenv('MODE_ENV') == 'dev') {
+            $response["file"] = $exception->getFile();
+            $response["line"] = $exception->getLine();
+            $response["trace"] = $exception->getTraceAsString();
+        }
     } catch (RPCException $exception) {
         echo Response::toJson($exception->getResponse());
-    } catch (PDOException $exception) {
-        $response["success"] = false;
-        $response["message"] = $exception->errorInfo[2];
-        $response["code"] = 500;
-        $response["errorCode"] = $exception->getCode();
-        echo Response::toJson($response);
+    } catch (GraphQLException $exception) {
+        echo Response::toJson($exception->getResponse());
     } catch (Throwable $exception) {
         $response["success"] = false;
         $response["message"] = $exception->getMessage();
         $response["file"] = $exception->getFile();
-        $response["line"] = $exception->getLine();
-        $response["trace"] = $exception->getTraceAsString();
-        $response["code"] = 500;
-        echo Response::toJson($response);
+        if (getenv('MODE_ENV') == 'dev') {
+            $response["file"] = $exception->getFile();
+            $response["line"] = $exception->getLine();
+            $response["trace"] = $exception->getTraceAsString();
+        }
     } finally {
+        if (!empty($response)) {
+            echo Response::toJson($response);
+        }
         return;
     }
 };
