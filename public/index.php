@@ -148,6 +148,7 @@ try {
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
+        exit();
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
         setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
@@ -156,6 +157,7 @@ try {
         $dbSplit = explode("@", Input::getPath()->part(2));
         Database::setDb($dbSplit[1] ?? $dbSplit[0]);
         new Wms();
+        exit();
     }
 } catch (OwsException|ServiceException $exception) {
     ob_clean();
