@@ -595,7 +595,7 @@ class Table extends Model
         $fieldsForStore = [];
         $columnsForGrid = [];
         $type = "";
-        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : null;
+        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : [];
         foreach ($fieldconfArr as $key => $value) {
             if ($value->properties == "*") {
                 $table = new Table($this->table, connection: $this->connection);;
