@@ -786,10 +786,11 @@ class Mapfile extends Controller
                 for ($i = 0; $i < sizeof($arr); $i++) {
                     $last = 100000;
                     foreach ($arr2 as $key => $value) {
-                        if ($value["sortid"] < $last) {
+                        $sortId = $value["sortid"] ?? 0;
+                        if ($sortId < $last) {
                             $temp = $value;
                             $del = $key;
-                            $last = $value["sortid"];
+                            $last = $sortId;
                         }
                     }
                     $sortedArr[] = $temp;
@@ -857,6 +858,7 @@ class Mapfile extends Controller
                     ?>
                     <?php
                 } else {
+                    $includeItemsStr = "all";
                     if ($type != "RASTER") {
                         if (empty($row["data"])) {
                             if (preg_match('/[A-Z]/', $row['f_geometry_column'])) {
@@ -868,7 +870,6 @@ class Mapfile extends Controller
                             $dataSql = $row["data"];
                         }
                         $fieldConf = !empty($row['fieldconf']) ? json_decode($row['fieldconf'], true) : [];
-                        $includeItemsStr = "all";
                         uksort($meta, function ($a, $b) use ($fieldConf) {
                             if (isset($fieldConf[$a]) && isset($fieldConf[$b])) {
                                 $sortIdA = (int)$fieldConf[$a]['sort_id'];
@@ -1845,10 +1846,11 @@ class Mapfile extends Controller
                 for ($i = 0; $i < sizeof($arr); $i++) {
                     $last = 100000;
                     foreach ($arr2 as $key => $value) {
-                        if ($value["sortid"] < $last) {
+                        $sortId = $value["sortid"] ?? 0;
+                        if ($sortId < $last) {
                             $temp = $value;
                             $del = $key;
-                            $last = $value["sortid"];
+                            $last = $sortId;
                         }
                     }
                     $sortedArr[] = $temp;
