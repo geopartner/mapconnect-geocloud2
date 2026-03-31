@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2025 MapCentia ApS
+ * @copyright  2026- Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -123,6 +124,9 @@ $sessionComment = "";
 $specialChars = "/['^£$%&*()}{@#~?><>,|=+¬]/";
 
 $logPath = "/var/www/geocloud2/public/logs/wfs_transactions.log";
+
+// Initialize $arr to prevent "array offset on null" errors if Transaction arrives without valid POST data
+$arr = [];
 
 // Post method is used
 // ===================
@@ -330,7 +334,8 @@ if (!isset($HTTP_FORM_VARS["REQUEST"])) {
 
 // Check if layer is enabled
 $isEnabled = false;
-if ($postgisObject->getGeometryColumns($postgisschema . "." . $HTTP_FORM_VARS["TYPENAME"], "*")["enableows"]) {
+$geometryColumns = $postgisObject->getGeometryColumns($postgisschema . "." . $HTTP_FORM_VARS["TYPENAME"], "*");
+if ($geometryColumns && $geometryColumns["enableows"]) {
     $isEnabled = true;
 }
 
@@ -1462,7 +1467,6 @@ function doSelect(string $table, string $sql, string $from, ?string $sql2): void
         if ($version != "1.1.0") $str .= writeTag("close", "gml", "featureMember", null, True, True, true);
         echo $str;
         flush();
-        ob_flush();
     }
     if ($version == "1.1.0") writeTag("close", "gml", "featureMembers", null, True, True);
     $postgisObject->execQuery("CLOSE curs");
@@ -2433,10 +2437,6 @@ function makeExceptionReport($value, array $attributes = []): void
 
 print("\n<!-- Memory used: " . round(memory_get_peak_usage() / 1024) . " KB -->\n");
 //print($sessionComment);
-// Make sure all is flushed
-echo str_pad("", 4096);
-flush();
-ob_flush();
 
 /**
  * @param string $type
