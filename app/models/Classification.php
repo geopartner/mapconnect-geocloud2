@@ -44,7 +44,7 @@ class Classification extends Model
         // Check if geom type is overridden
         $def = new Tile($table);
         $this->def = $def->get();
-        if (($this->def['data'][0]['geotype']) && $this->def['data'][0]['geotype'] != "Default") {
+        if (isset($this->def['data'][0]['geotype']) && $this->def['data'][0]['geotype'] != "Default") {
             $this->geometryType = $this->def['data'][0]['geotype'];
         } else {
             $this->geometryType = null;
