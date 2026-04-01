@@ -369,12 +369,18 @@ class Layer extends Table
 
                 foreach ($fields as $key => $field) {
                     // If column comment is empty, we output from field conf
-                    if (empty($field['comment'])) {
+                    if (empty($field['comment']) && isset($fieldConf[$key]['desc'])) {
                         $fields[$key]['comment'] = $fieldConf[$key]['desc'];
                     }
-                    $fields[$key]['alias'] = $fieldConf[$key]['alias'];
-                    $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
-                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    if (isset($fieldConf[$key]['alias'])) {
+                        $fields[$key]['alias'] = $fieldConf[$key]['alias'];
+                    }
+                    if (isset($fieldConf[$key]['querable'])) {
+                        $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
+                    }
+                    if (isset($fieldConf[$key]['sort_id'])) {
+                        $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    }
                 }
 
                 // Sort fields
