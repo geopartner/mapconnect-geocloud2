@@ -837,6 +837,7 @@ class Mapfile extends Controller
                             break;
                     }
                 }
+                $includeItemsStr = "all";
                 if ($row['wmssource']) {
                     ?>
                     TYPE RASTER
