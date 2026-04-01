@@ -48,7 +48,11 @@ class Tilecache extends Controller
     public function delete_index(): array
     {
         $layer = new \app\models\Layer();
-        $cache = $layer->getAll(Database::getDb(), true, Input::getPath()->part(4), false, true, false)["data"][0]["def"]->cache;
+        $result = $layer->getAll(Database::getDb(), true, Input::getPath()->part(4), false, true, false);
+        $cache = null;
+        if (!empty($result["data"]) && isset($result["data"][0]["def"]) && $result["data"][0]["def"] !== null) {
+            $cache = $result["data"][0]["def"]->cache;
+        }
 
         // Default
         // =======
