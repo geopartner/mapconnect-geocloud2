@@ -106,11 +106,11 @@ class Auth extends AbstractApi
                 return $this->redirectResponse("$redirectUri$separator$paramsStr");
             }
         } else {
-            if ($_GET['parentdb']) {
+            if (isset($_GET['parentdb']) && $_GET['parentdb']) {
                 $client = new Client(connection: new Connection(database: $_GET['parentdb']));
                 // Check client id
                 try {
-                    $clientData = $client->get($_GET['client_id']);
+                    $clientData = $client->get($_GET['client_id'] ?? null);
                 } catch (Exception $e) {
                     $error = "invalid_client";
                     $errorDesc = "Client with identifier '{$_GET['client_id']}' was not found in the directory";
