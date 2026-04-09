@@ -20,11 +20,7 @@ use \app\conf\App;
 <link rel="stylesheet" href="/js/ext/examples/ux/gridfilters/css/GridFilters.css"/>
 <link rel="stylesheet" href="/js/ext/examples/ux/gridfilters/css/RangeMenu.css"/>
 
-<!-- build:css /css/build/styles.min.css -->
-<link rel="stylesheet" href="/js/bootstrap/css/bootstrap.icons.min.css"/>
-<link rel="stylesheet" href="/css/jquery.plupload.queue.css"/>
-<link rel="stylesheet" href="/css/styles.css"/>
-<!-- /build -->
+<link rel="stylesheet" href="/css/build/styles.min.7ac0fcf833facf8b.7ac0fcf833facf8b.css">
 
 </head>
 <body>
@@ -166,58 +162,13 @@ use \app\conf\App;
     document.getElementById("loadscreentext").innerHTML = __("GC2 Admin is loading. Hang on...");
 </script>
 
-<script src="//maps.googleapis.com/maps/api/js=<?php echo App::$param["googleApiKey"]; ?>&v=3&libraries=places"></script>
+<script src="//maps.googleapis.com/maps/api/js=<?php echo App::$param["googleApiKey"] ?? ""; ?>&v=3&libraries=places"></script>
 <script src="/js/OpenLayers-2.12/OpenLayers.gc2.js"></script>
 
-<!-- build:js /js/admin/build/all.min.js -->
-<script src="/js/canvasResize/binaryajax.js"></script>
-<script src="/js/canvasResize/exif.js"></script>
-<script src="/js/canvasResize/canvasResize.js"></script>
-<script src="/js/ext/adapter/ext/ext-base-debug.js"></script>
-<script src="/js/ext/ext-all-debug.js"></script>
-<script src="/js/ext/examples/ux/fileuploadfield/FileUploadField.js"></script>
-<script src="/js/ext/examples/ux/Spinner.js"></script>
-<script src="/js/ext/examples/ux/SpinnerField.js"></script>
-<script src="/js/ext/examples/ux/CheckColumn.js"></script>
-<script src="/js/ext/examples/ux/gridfilters/menu/RangeMenu.js"></script>
-<script src="/js/ext/examples/ux/gridfilters/menu/ListMenu.js"></script>
-<script src="/js/ext/examples/ux/superboxselect/SuperBoxSelect.js"></script>
-<script src="/js/ext/examples/ux/gridfilters/GridFilters.js"></script>
-<script src="/js/ext/examples/ux/gridfilters/filter/Filter.js"></script>
-<script src="/js/ext/examples/ux/gridfilters/filter/StringFilter.js"></script>
-<script src="/js/jquery/1.10.0/jquery.min.js"></script>
-<script src="/js/GeoExt/script/GeoExt.js"></script>
-<script src="/js/openlayers/proj4js-combined.js"></script>
-<script src="/js/plupload/js/moxie.min.js"></script>
-<script src="/js/plupload/js/plupload.min.js"></script>
-<script src="/js/plupload/js/jquery.plupload.queue/jquery.plupload.queue.min.js"></script>
-<script src="/js/admin/msg.js"></script>
-<script src="/js/admin/admin.js"></script>
-<script src="/js/admin/edittablestructure.js"></script>
-<script src="/js/admin/elasticsearchmapping.js"></script>
-<script src="/js/admin/editwmsclass.js"></script>
-<script src="/js/admin/editwmslayer.js"></script>
-<script src="/js/admin/edittilelayer.js"></script>
-<script src="/js/admin/classwizards.js"></script>
-<script src="/js/admin/addshapeform.js"></script>
-<script src="/js/admin/addbitmapform.js"></script>
-<script src="/js/admin/addrasterform.js"></script>
-<script src="/js/admin/addfromscratch.js"></script>
-<script src="/js/admin/addviewform.js"></script>
-<script src="/js/admin/addosmform.js"></script>
-<script src="/js/admin/addqgisform.js"></script>
-<script src="/js/admin/colorfield.js"></script>
-<script src="/js/admin/httpauthform.js"></script>
-<script src="/js/admin/apikeyform.js"></script>
-<script src="/js/admin/attributeform.js"></script>
-<script src="/js/admin/filterfield.js"></script>
-<script src="/js/admin/filterbuilder.js"></script>
-<script src="/js/admin/comparisoncomboBox.js"></script>
-<script src="/js/openlayers/defs/EPSG3857.js"></script>
-<!-- /build -->
+<script src="/js/admin/build/all.min.5a7c97b94f9f901c.5a7c97b94f9f901c.js"></script>
 
-<script src="/api/v1/js/api.js"></script>
-<script src="/api/v3/js/geocloud.js"></script>
+<script src="/api/v1/js/api.be89462101e8b88a.be89462101e8b88a.js"></script>
+<script src="/api/v3/js/geocloud.389ece910c1089ae.389ece910c1089ae.js"></script>
 
 </body>
 </html>
