@@ -700,16 +700,19 @@ class Table extends Model
                     $arr = $this->array_push_assoc($arr, "template", !empty($fieldconfArr[$key]->template) ? $fieldconfArr[$key]->template : null);
                     $arr = $this->array_push_assoc($arr, "properties", !empty($fieldconfArr[$key]->properties) ? $fieldconfArr[$key]->properties : null);
                     if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
-                        $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable']));
+                        $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable'] ?? false));
                     } else {
                         $arr = $this->array_push_assoc($arr, "is_nullable", !isset($fieldconfArr[$key]->is_nullable) ? true : $fieldconfArr[$key]->is_nullable);;
                     }
                     $arr = $this->array_push_assoc($arr, "ignore", !empty($fieldconfArr[$key]->ignore) && $fieldconfArr[$key]->ignore);
                     $arr = $this->array_push_assoc($arr, "desc", $this->getColumnComment($key) ?: (!empty($fieldconfArr[$key]->desc) ? $fieldconfArr[$key]->desc : ""));
-                    if ($value['typeObj']['type'] == "decimal") {
-                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ({$value['typeObj']['precision']} {$value['typeObj']['scale']})");
+                    if (($value['typeObj']['type'] ?? null) == "decimal") {
+                        $precision = $value['typeObj']['precision'] ?? 10;
+                        $scale = $value['typeObj']['scale'] ?? 3;
+                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ($precision $scale)");
                     } else {
-                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']}");
+                        $type = $value['typeObj']['type'] ?? 'string';
+                        $arr = $this->array_push_assoc($arr, "type", $type);
                     }
                     $response['data'][] = $arr;
                 }
@@ -763,7 +766,7 @@ class Table extends Model
         $fieldconfArr = $this->geometryColumns["fieldconf"] == null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($data as $value) {
             $safeColumn = $value->column;
-            if ($this->metaData[$value->id]["is_nullable"] != $value->is_nullable && !$onlyRename) {
+            if (($this->metaData[$value->id]["is_nullable"] ?? null) != $value->is_nullable && !$onlyRename) {
                 $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER \"$value->column\" " . ($value->is_nullable ? "DROP" : "SET") . " NOT NULL";
                 $res = $this->prepare($sql);
                 try {
@@ -776,7 +779,7 @@ class Table extends Model
                     }
                 }
             }
-            if ($this->metaData[$value->id]["desc"] !== $value->desc && !$onlyRename) {
+            if (($this->metaData[$value->id]["desc"] ?? null) !== $value->desc && !$onlyRename) {
                 if ($value->desc === "") {
                     $value->desc = null;
                 }
