@@ -90,12 +90,13 @@ class Sql extends Controller
 
         // If JSON body when set GET input params
         // ======================================
-        if ($json != null) {
+        if (is_array($json)) {
+            $params = is_array(Input::$params) ? Input::$params : [];
 
-            $typeHints = $json["type_hints"] ?? Input::$params["type_hints"] ?? [];
-            $typeFormats = $json["type_formats"] ?? Input::$params["type_formats"] ?? [];
-            $srs = $json["srs"] ?? Input::$params["srs"] ?? $srs ?? null;
-            $outputFormat = !empty($json["format"]) ? $json["format"] : (!empty($json["output_format"]) ? $json["output_format"] : Input::$params["format"] ?? Input::$params["output_format"]);
+            $typeHints = $json["type_hints"] ?? $params["type_hints"] ?? [];
+            $typeFormats = $json["type_formats"] ?? $params["type_formats"] ?? [];
+            $srs = $json["srs"] ?? $params["srs"] ?? $srs ?? null;
+            $outputFormat = $json["format"] ?? $json["output_format"] ?? $params["format"] ?? $params["output_format"] ?? null;
 
             // Set input params from JSON
             // ==========================
@@ -104,14 +105,14 @@ class Sql extends Controller
                     "q" => !empty($json["q"]) ? $json["q"] : null,
                     "client_encoding" => !empty($json["client_encoding"]) ? $json["client_encoding"] : null,
                     "geoformat" => !empty($json["geoformat"]) ? $json["geoformat"] : (!empty($json["geo_format"]) ? $json["geo_format"] : null),
-                    "key" => !empty($json["key"]) ? $json["key"] : Input::$params["key"],
+                    "key" => !empty($json["key"]) ? $json["key"] : ($params["key"] ?? null),
                     "geojson" => !empty($json["geojson"]) ? $json["geojson"] : null,
                     "allstr" => !empty($json["allstr"]) ? $json["allstr"] : null,
                     "alias" => !empty($json["alias"]) ? $json["alias"] : null,
                     "lifetime" => !empty($json["lifetime"]) ? $json["lifetime"] : null,
                     "base64" => !empty($json["base64"]) ? $json["base64"] : null,
-                    "convert_types" => !empty($json["convert_types"]) ? $json["convert_types"] : Input::$params["convert_types"],
-                    "params" => !empty($json["params"]) ? $json["params"] : Input::$params["params"],
+                    "convert_types" => !empty($json["convert_types"]) ? $json["convert_types"] : ($params["convert_types"] ?? null),
+                    "params" => !empty($json["params"]) ? $json["params"] : ($params["params"] ?? null),
                     "type_hints" => $typeHints,
                     "type_formats" => $typeFormats,
                     "format" => $outputFormat,
