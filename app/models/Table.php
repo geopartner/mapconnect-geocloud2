@@ -738,7 +738,7 @@ class Table extends Model
         $this->setType();
         $fieldconfArr = $this->geometryColumns["fieldconf"] === null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($fieldconfArr as $key => $value) {
-            if (!$this->metaData[$key]) {
+            if (!isset($this->metaData[$key]) || !$this->metaData[$key]) {
                 unset($fieldconfArr[$key]);
             }
         }
