@@ -1387,7 +1387,9 @@ class Mapfile extends Controller
         $data = ob_get_clean();
         $path = App::$param['path'] . "app/wms/mapfiles/";
         $name = Connection::$param['postgisdb'] . "_" . Connection::$param['postgisschema'] . "_wms.map";
-        @unlink($path . $name);
+        if (file_exists($path . $name)) {
+            unlink($path . $name);
+        }
         $fh = fopen($path . $name, 'w');
         fwrite($fh, $data);
         fclose($fh);
@@ -2365,7 +2367,9 @@ class Mapfile extends Controller
         $data = ob_get_clean();
         $path = App::$param['path'] . "app/wms/mapfiles/";
         $name = Connection::$param['postgisdb'] . "_" . Connection::$param['postgisschema'] . "_wfs.map";
-        @unlink($path . $name);
+        if (file_exists($path . $name)) {
+            unlink($path . $name);
+        }
         $fh = fopen($path . $name, 'w');
         fwrite($fh, $data);
         fclose($fh);
