@@ -405,7 +405,7 @@ class Session extends Model
      */
     private static function setSessionVars(array $row, ?string $schema): void
     {
-        $_SESSION['zone'] = $row['zone'];
+        $_SESSION['zone'] = $row['zone'] ?? null;
         $_SESSION['auth'] = true;
         $_SESSION['screen_name'] = $row['screenname'];
         $_SESSION['parentdb'] = $row['parentdb'] ?: $row['screenname'];
@@ -413,7 +413,7 @@ class Session extends Model
         $_SESSION["properties"] = !empty($row["properties"]) ? json_decode($row["properties"]) : null;
         $_SESSION['email'] = $row['email'];
         $_SESSION['usergroup'] = $row['usergroup'] ?: null;
-        $_SESSION['created'] = strtotime($row['created']);
+        $_SESSION['created'] = !empty($row['created']) ? strtotime($row['created']) : null;
         $_SESSION['postgisschema'] = $schema;
     }
 
