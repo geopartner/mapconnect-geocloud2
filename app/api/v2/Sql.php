@@ -61,14 +61,13 @@ class Sql extends Controller
      * @throws InvalidArgumentException
      * @throws Exception
      */
-    public function get_index(): array
+    public function get_index($r, $api = null): array
     {
         // Get the URI params from request
         // /{user}
-        $r = func_get_arg(0);
-        try {
-            $this->api = func_get_arg(1);
-        } catch (Throwable) {
+        if ($api !== null) {
+            $this->api = $api;
+        } else {
             $srs = is_numeric(Input::get('srs')) ? Input::get('srs') : 3857;
             $this->api = new \app\models\Sql();
             $this->api->connect();
@@ -169,9 +168,8 @@ class Sql extends Controller
      * @throws PhpfastcacheInvalidArgumentException
      * @throws GC2Exception
      */
-    public function post_index(): array
+    public function post_index($r): array
     {
-        $r = func_get_arg(0);
 
         // Use bulk if content type is text/plain
         if (Input::getContentType() == Input::TEXT_PLAIN) {
