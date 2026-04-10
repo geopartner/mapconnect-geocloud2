@@ -9,6 +9,7 @@
 namespace app\models;
 
 use app\exceptions\GC2Exception;
+use app\inc\Connection;
 use app\inc\Util;
 use app\inc\Model;
 use app\inc\UserFilter;
@@ -25,7 +26,6 @@ use sad_spirit\pg_wrapper\converters\DefaultTypeConverterFactory;
  */
 class Geofence extends Model
 {
-    private UserFilter $userFilter;
     public const string ALLOW_ACCESS = "allow";
     public const string DENY_ACCESS = "deny";
     public const string LIMIT_ACCESS = "limit";
@@ -34,11 +34,10 @@ class Geofence extends Model
      * Geofencing constructor.
      * @param UserFilter|null $userFilter
      */
-    public function __construct(UserFilter|null $userFilter)
+    public function __construct(private readonly ?UserFilter $userFilter = null, ?Connection $connection = null)
     {
-        parent::__construct();
-        if ($userFilter) {
-            $this->userFilter = $userFilter;
+        parent::__construct(connection: $connection);
+        if ($this->userFilter) {
             $this->userFilter->ipAddress = Util::clientIp();
         }
     }
@@ -135,13 +134,13 @@ class Geofence extends Model
             }
         } else {
             $result = $model->prepare($str);
-            $result->execute();
+            $this->execute($result);
             $rowCount += $result->rowCount();
         }
 
         $select = "select count(*) from foo where {$filters['filter']}";
         $res = $model->prepare($select);
-        $res->execute();
+        $this->execute($res);
         $row = $res->fetch();
 
         if ($rowCount == 0) {
@@ -169,13 +168,8 @@ class Geofence extends Model
         }
         $sql .= ' order by priority';
         $res = $this->prepare($sql);
-
-        $res->execute($params);
-        $data = $this->fetchAll($res, "assoc");
-        if (sizeof($data) == 0) {
-            throw new GC2Exception("No rules", 404, null, 'RULE_NOT_FOUND');
-        }
-        return $data;
+        $this->execute($res, $params);
+        return $this->fetchAll($res, "assoc");
     }
 
     /**
@@ -202,7 +196,7 @@ class Geofence extends Model
             $sql = "insert into settings.geofence (id $fields) values (default $values) returning *";
         }
         $res = $this->prepare($sql);
-        $res->execute($data);
+        $this->execute($res, $data);
         $response['success'] = true;
         $response['data'] = $this->fetchRow($res);
         return $response;
@@ -216,7 +210,7 @@ class Geofence extends Model
     public function update(string $id, array $data): int
     {
         $props = array_keys($data);
-        if (sizeof($props) < 2) {
+        if (sizeof($props) < 1) {
             throw new GC2Exception('Nothing to be set', 400);
         }
         $sets = [];
@@ -231,7 +225,7 @@ class Geofence extends Model
         $setsStr = implode(",", $sets);
         $sql = "update settings.geofence set $setsStr where id=:id returning *";
         $res = $this->prepare($sql);
-        $res->execute([...$data, "id" => $id]);;
+        $this->execute($res, [...$data, "id" => $id]);;
         if ($res->rowCount() == 0) {
             throw new GC2Exception("No rule with id", 404, null, 'RULE_NOT_FOUND');
         }
@@ -247,7 +241,7 @@ class Geofence extends Model
     {
         $sql = "delete from settings.geofence where id=:id returning id";
         $res = $this->prepare($sql);
-        $res->execute(["id" => $id]);
+        $this->execute($res, ["id" => $id]);
         if ($res->rowCount() == 0) {
             throw new GC2Exception("No rule with id", 404, null, 'RULE_NOT_FOUND');
         }

@@ -1,6 +1,7 @@
 /*
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2019 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *  
  */
@@ -1243,7 +1244,7 @@ $(document).ready(function () {
                                             workflowStore.load();
                                         };
                                         if (!r.exists) {
-                                            Ext.MessageBox.confirm(__('Confirm'), __("You are about to .....") + " '" + records[0].get("f_table_name") + "'. " + __("Are you sure?"), function (btn) {
+                                            Ext.MessageBox.confirm(__('Confirm'), __("Enable workflow on") + " '" + records[0].get("f_table_name") + "'. " + __("Are you sure?"), function (btn) {
                                                 if (btn === "yes") {
                                                     Ext.Ajax.request({
                                                         url: '/controllers/table/workflow/' + records[0].get("f_table_schema") + "." + records[0].get("f_table_name"),
@@ -5076,7 +5077,9 @@ setInterval(function () {
             }
         },
         error: function () {
-            alert("Noget gik galt. Prøv at refreshe din browser");
+            //TODO: Why are we haunted by badgateway?
+            //alert("Noget gik galt. Prøv at refreshe din browser");
+            console.error("Noget gik galt. Prøv at refreshe din browser");
         }
     });
 }, 2000);

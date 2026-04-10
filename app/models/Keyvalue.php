@@ -2,12 +2,14 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2021 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
 
 namespace app\models;
 
+use app\inc\Connection;
 use app\inc\Model;
 use Exception;
 use PDOException;
@@ -19,9 +21,9 @@ use PDOException;
  */
 class Keyvalue extends Model
 {
-    function __construct()
+    function __construct(?Connection $connection = null)
     {
-        parent::__construct();
+        parent::__construct(connection: $connection);
     }
 
     /**
@@ -105,7 +107,7 @@ class Keyvalue extends Model
         }
         // HACK get rid of unnecessary meta in Vidi snapshots
         if (isset($urlVars["like"]) && $urlVars["like"] == "state_snapshot_%") {
-            if (!is_array($response["data"][0])) {
+            if (!isset($response["data"][0]) || !is_array($response["data"][0])) {
                 $parsed = !empty($response["data"]["value"]) ? json_decode($response["data"]["value"], true) : [];
                 unset($parsed["snapshot"]);
                 if ($parsed)

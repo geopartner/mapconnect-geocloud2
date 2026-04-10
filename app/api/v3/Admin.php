@@ -166,8 +166,7 @@ class Admin extends Controller
 
         $arr = [Database::getDb(), "mapcentia", "gc2scheduler", "template_geocloud"];
         foreach ($arr as $db) {
-            Database::setDb($db);
-            $conn = new Model();
+            $conn = new Model(connection: new \app\inc\Connection(database: $db));
 
             $sqls = match ($db) {
                 "mapcentia" => Sql::mapcentia(),
@@ -183,7 +182,7 @@ class Admin extends Controller
                     $data[$db] .= "-";
                 }
             }
-            $conn->db = NULL;
+            $conn->PgConnection = NULL;
             $conn = NULL;
         }
         $response["success"] = true;

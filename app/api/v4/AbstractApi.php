@@ -1,14 +1,22 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2013-2025 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
 
 namespace app\api\v4;
 
+use app\api\v4\Responses\GetResponse;
+use app\api\v4\Responses\NoContentResponse;
+use app\api\v4\Responses\PatchResponse;
+use app\api\v4\Responses\PostResponse;
+use app\api\v4\Responses\RedirectResponse;
+use app\api\v4\Responses\TextResponse;
 use app\exceptions\GC2Exception;
+use app\inc\Connection;
+use app\inc\Input;
 use app\inc\Model;
 use app\models\Database;
 use app\models\Table as TableModel;
@@ -24,6 +32,7 @@ use Symfony\Component\Validator\Constraints as Assert;
  */
 abstract class AbstractApi implements ApiInterface
 {
+
     public array $table;
     public ?array $schema;
     public ?array $qualifiedName;
@@ -31,10 +40,16 @@ abstract class AbstractApi implements ApiInterface
     public ?array $column;
     public ?array $index;
     public ?array $constraint;
-    public array $jwt;
+    public ?array $sequence;
+    public ?string $resource;
     private const array PRIVATE_PROPERTIES = ['num', 'typname', 'full_type', 'character_maximum_length',
         'numeric_precision', 'numeric_scale', 'max_bytes', 'reference', 'restriction', 'is_primary', 'is_unique',
         'index_method', 'checks', 'geom_type', 'srid', 'is_array', 'udt_name'];
+
+
+    public function __construct(protected readonly Connection $connection)
+    {
+    }
 
     /**
      * @param string|null $schema
@@ -43,30 +58,34 @@ abstract class AbstractApi implements ApiInterface
      * @param string|null $column
      * @param string|null $index
      * @param string|null $constraint
-     * @param string $userName
-     * @param bool $superUser
+     * @param string|null $sequence
      * @return void
      * @throws GC2Exception
      * @throws PhpfastcacheInvalidArgumentException
      */
-    public function initiate(?string $schema, ?string $relation, ?string $key, ?string $column, ?string $index, ?string $constraint, string $userName, bool $superUser): void
+    public function initiate(?string $schema = null, ?string $relation = null, ?string $key = null, ?string $column = null, ?string $index = null, ?string $constraint = null, ?string $sequence = null): void
     {
+        $userName = $this->route->jwt["data"]["uid"];
+        $superUser = $this->route->jwt["data"]["superUser"];
+
         $this->schema = $schema ? explode(',', $schema) : null;
         $this->unQualifiedName = $relation ? explode(',', $relation) : null;
         $this->column = $column ? explode(',', $column) : null;
         $this->index = $index ? explode(',', $index) : null;
         $this->constraint = $constraint ? explode(',', $constraint) : null;
-
-        if (!$superUser && !($userName == $this->schema[0] || $this->schema[0] == "public")) {
-            throw new GC2Exception("Not authorized", 403, null, "UNAUTHORIZED");
-        }
+        $this->sequence = $sequence ? explode(',', $sequence) : null;
         $this->qualifiedName = $relation ? array_map(fn($r) => $schema . "." . $r, explode(',', $relation)) : null;
         if (!empty($this->schema)) {
             $this->doesSchemaExist();
         }
+        if (!$superUser && !($userName == $this->schema[0] || $this->schema[0] == "public")) {
+            throw new GC2Exception("Not authorized", 403, null, "UNAUTHORIZED");
+        }
         if ($this->qualifiedName) {
             $this->doesTableExist();
-            $this->table = array_map(fn($n) => new TableModel($n, false, false, false), $this->qualifiedName);
+            $this->table = array_map(fn($n) => new TableModel(table: $n, lookupForeignTables: false, connection: $this->connection), $this->qualifiedName);
+        } else {
+            $this->table = [new TableModel(table: null, lookupForeignTables: false, connection: $this->connection)];
         }
         if (!empty($this->column)) {
             $this->doesColumnExist();
@@ -77,14 +96,23 @@ abstract class AbstractApi implements ApiInterface
         if (!empty($this->constraint)) {
             $this->doesConstraintExist();
         }
+        if (!empty($this->sequence)) {
+            $this->doesSequenceExist();
+        }
     }
 
     /**
-     * @throws GC2Exception
+     * Checks if the specified schemas exist in the connected database.
+     * Iterates through the list of schemas and verifies their existence,
+     * throwing an exception if any schema is not found.
+     *
+     * @return void
+     *
+     * @throws GC2Exception If any of the schemas in the list do not exist in the database.
      */
     public function doesSchemaExist(): void
     {
-        $db = new Database();
+        $db = new Database($this->connection);
         foreach ($this->schema as $name) {
             if (!$db->doesSchemaExist($name)) {
                 throw new GC2Exception("Schema not found", 404, null, "SCHEMA_NOT_FOUND");
@@ -93,11 +121,17 @@ abstract class AbstractApi implements ApiInterface
     }
 
     /**
-     * @throws GC2Exception
+     * Checks whether all specified tables exist in the database.
+     * Iterates through the list of qualified table names and verifies their existence
+     * using the database connection. Throws an exception if any table is not found.
+     *
+     * @return void
+     *
+     * @throws GC2Exception If a specified table does not exist in the database.
      */
     public function doesTableExist(): void
     {
-        $db = new Database();
+        $db = new Database($this->connection);
         foreach ($this->qualifiedName as $name) {
             if (!$db->doesRelationExist($name)) {
                 throw new GC2Exception("Table not found", 404, null, "TABLE_NOT_FOUND");
@@ -106,7 +140,13 @@ abstract class AbstractApi implements ApiInterface
     }
 
     /**
-     * @throws GC2Exception
+     * Checks whether the specified columns exist in the table's metadata.
+     * Iterates through the list of columns and validates their presence in the metadata of the table's first row.
+     * Throws an exception if any column is not found.
+     *
+     * @return void
+     *
+     * @throws GC2Exception If any specified column is missing from the table's metadata.
      */
     public function doesColumnExist(): void
     {
@@ -118,8 +158,12 @@ abstract class AbstractApi implements ApiInterface
     }
 
     /**
+     * Checks if the specified indices exist in the table's schema.
+     * Validates against the defined indices and throws an exception if any index is missing.
+     *
      * @return void
-     * @throws GC2Exception
+     *
+     * @throws GC2Exception If one or more specified indices are not found in the schema.
      */
     public function doesIndexExist(): void
     {
@@ -173,6 +217,32 @@ abstract class AbstractApi implements ApiInterface
     }
 
     /**
+     * Checks if the specified sequences exist within the defined schema and table.
+     * Iterates through the configured sequences and validates their presence in the database metadata.
+     * Throws an exception if any sequence is not found.
+     *
+     * @return void
+     *
+     * @throws GC2Exception If a sequence does not exist in the schema or table.
+     */
+    private function doesSequenceExist(): void
+    {
+        $sequences = $this->table[0]->getSequences($this->schema[0]);
+        foreach ($this->sequence as $sequence) {
+            $exists = false;
+            foreach ($sequences['data'] as $seq) {
+                if ($seq['name'] == $sequence) {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                throw new GC2Exception("Sequence not found", 404, null, "SEQUENCE_NOT_FOUND");
+            }
+        }
+    }
+
+    /**
      * @throws GC2Exception
      */
     public function postWithResource(): void
@@ -207,7 +277,7 @@ abstract class AbstractApi implements ApiInterface
         foreach (glob(dirname(__FILE__) . "/processors/*/classes/pre/*.php") as $filename) {
             $class = "app\\api\\v4\\processors\\" . array_reverse(explode("/", $filename))[3] .
                 "\\classes\\pre\\" . explode(".", array_reverse(explode("/", $filename))[0])[0];
-            $preProcessor = new $class($this->jwt);
+            $preProcessor = new $class($this->route->jwt);
             $data = $preProcessor->{$method}($model, $data);
         }
         return $data;
@@ -218,7 +288,7 @@ abstract class AbstractApi implements ApiInterface
         foreach (glob(dirname(__FILE__) . "/processors/*/classes/post/*.php") as $filename) {
             $class = "app\\api\\v4\\processors\\" . array_reverse(explode("/", $filename))[3] .
                 "\\classes\\post\\" . explode(".", array_reverse(explode("/", $filename))[0])[0];
-            $postProcessor = new $class($this->jwt);
+            $postProcessor = new $class($this->route->jwt);
             $data = $postProcessor->{$method}($model, $data);
         }
         return $data;
@@ -231,7 +301,6 @@ abstract class AbstractApi implements ApiInterface
      *
      * @param Collection $collection The validation rules or constraints to be applied to the data.
      * @param string|null $data The JSON-encoded payload of the request, or null if no data is provided.
-     * @param string $resource The resource being validated within the request.
      * @param string $method The HTTP method used in the request (e.g., GET, POST, PATCH, DELETE).
      * @param bool $allowPatchOnCollection Whether patching on a collection of resources is allowed.
      *
@@ -240,10 +309,13 @@ abstract class AbstractApi implements ApiInterface
      * @throws GC2Exception If the data is invalid, contains a payload in disallowed methods,
      *                      or violates the provided constraints.
      */
-    public function validateRequest(Collection $collection, ?string $data, string $resource, string $method, bool $allowPatchOnCollection = false): void
+    public function validateRequest(Collection $collection, ?string $data, string $method, bool $allowPatchOnCollection = false): void
     {
         if (!empty($data) && !json_validate($data)) {
             throw new GC2Exception("Invalid JSON. Check your request", 400, null, "INVALID_DATA");
+        }
+        if (empty($data) && in_array(Input::getMethod(), ['post', 'patch']) && !str_starts_with(Input::getContentType(), 'multipart/form-data')) {
+            throw new GC2Exception("POST and PATCH without request body is not allowed.", 400);
         }
 
         $data = $data == null ? null : json_decode($data, true);
@@ -254,24 +326,27 @@ abstract class AbstractApi implements ApiInterface
             throw new GC2Exception("You can't use a payload in DELETE or GET", 400, null, "INVALID_DATA");
         }
 
-        if (!$allowPatchOnCollection && $method == 'patch' && isset($data[$resource])) {
-            throw new GC2Exception("You can't PATCH with a collection of $resource", 400, null, "INVALID_DATA");
+        if (!$allowPatchOnCollection && $method == 'patch' && isset($data[$this->resource])) {
+            throw new GC2Exception("You can't PATCH with a collection of $this->resource", 400, null, "INVALID_DATA");
         }
 
-        $validator = Validation::createValidator();
-
-        if (isset($data[$resource]) && is_array($data[$resource])) {
-            foreach ($data[$resource] as $datum) {
-                $violations = $validator->validate($datum, $collection);
+        // Validate the payload if the method is POST or PATCH
+        if (in_array($method, ['post', 'patch'])) {
+            $validator = Validation::createValidator();
+            if (!empty($data) && array_is_list($data)) {
+                foreach ($data as $datum) {
+                    $violations = $validator->validate($datum, $collection);
+                    $this->checkViolations($violations);
+                }
+            } else {
+                $violations = $validator->validate($data, $collection);
                 $this->checkViolations($violations);
             }
-        } else {
-            $violations = $validator->validate($data, $collection);
-            $this->checkViolations($violations);
         }
     }
 
-    static private function removeUnderscoreKeys(array $array): array {
+    static private function removeUnderscoreKeys(array $array): array
+    {
         $filteredArray = [];
         foreach ($array as $key => $value) {
             if (!is_string($key) || !str_starts_with($key, '_')) {
@@ -299,14 +374,68 @@ abstract class AbstractApi implements ApiInterface
         }
     }
 
-    protected function getCreatedResponse(array $res): array
+    /**
+     * @throws GC2Exception
+     */
+    protected function getResponse(array $data, bool $single = false): GetResponse
     {
-        if (count($res["tables"]) == 1) {
-            $res = $res["tables"][0];
+        if ($single) {
+            $data = $data[0];
         }
-        $res["code"] = "201";
-        return $res;
+        return new GetResponse(data: $data);
+    }
 
+    /**
+     * @throws GC2Exception
+     */
+    protected function postResponse(string $baseUri, array $list): PostResponse
+    {
+        return $this->prepareResponse('post', $baseUri, $list);
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    protected function patchResponse(string $baseUri, array $list = []): PatchResponse
+    {
+        return $this->prepareResponse('patch', $baseUri, $list);
+    }
+
+    protected function deleteResponse(): NoContentResponse
+    {
+        return new NoContentResponse();
+    }
+
+    protected function textResponse(string $text): TextResponse
+    {
+        return new TextResponse(text: $text);
+    }
+
+    protected function emptyResponse(): NoContentResponse
+    {
+        // We flush the output buffer to ensure that the response is sent immediately
+        flush();
+        return new NoContentResponse();
+    }
+
+    protected function redirectResponse(string $location): RedirectResponse
+    {
+        return new RedirectResponse(location: $location);
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    private function prepareResponse(string $method, string $baseUri, array $list = []): PostResponse|PatchResponse
+    {
+        $location = $baseUri . implode(",", $list);
+        $res = array_map(fn($l) => ['_links' => ['self' => $baseUri . $l]], $list);
+        if ($method == 'patch') {
+            return new PatchResponse(data: $res, location: $location);
+        } elseif ($method == 'post') {
+            return new PostResponse(data: $res, location: $location);
+        }
+        throw new GC2Exception("Method not allowed", 405, null, "METHOD_NOT_ALLOWED");
     }
 
     /**
@@ -351,5 +480,12 @@ abstract class AbstractApi implements ApiInterface
                 new Assert\NotBlank(),
             ]),
         ]);
+    }
+
+    public function options_index(): void
+    {
+    }
+    public function head_index(): void
+    {
     }
 }

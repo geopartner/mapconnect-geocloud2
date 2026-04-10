@@ -9,9 +9,9 @@
 namespace app\models;
 
 use app\exceptions\GC2Exception;
+use app\inc\Connection;
 use app\inc\Globals;
 use app\inc\Model;
-use app\conf\Connection;
 use app\conf\App;
 use app\inc\Geometrycolums;
 use app\inc\Cache;
@@ -43,22 +43,20 @@ class Table extends Model
      * @param string|null $table
      * @param bool $temp
      * @param bool $getEnums
-     * @throws PhpfastcacheInvalidArgumentException
+     * @param bool $lookupForeignTables
+     * @param Connection|null $connection
      * @throws GC2Exception
+     * @throws PhpfastcacheInvalidArgumentException
      */
-    function __construct(?string $table, bool $temp = false, bool $getEnums = true, bool $lookupForeignTables = true)
+    function __construct(?string $table, bool $temp = false, bool $getEnums = true, bool $lookupForeignTables = true, ?Connection $connection = null)
     {
-        parent::__construct();
-        // Make sure db connection is init
-        if (!$this->db) {
-            $this->connect();
-        }
+        parent::__construct(connection: $connection);
         $_schema = $this->explodeTableName($table)["schema"];
         $_table = $this->explodeTableName($table)["table"];
         if (!$_schema) {
             // If temp, then don't prefix with schema. Used when table/view is temporary
             if (!$temp) {
-                $_schema = Connection::$param['postgisschema'] ?? null;
+                $_schema = $this->postgisschema ?? null;
                 $table = $_schema . "." . $table;
             }
         } else {
@@ -70,8 +68,8 @@ class Table extends Model
 
         if ($this->schema != "settings") {
             $cacheType = "relExist";
-            $cacheRel = ($this->table);
-            $cacheId = ($this->postgisdb . "_" . $cacheRel . "_" . $cacheType);
+            $cacheRel = md5($this->table);
+            $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
             $CachedString = Cache::getItem($cacheId);
             if ($CachedString != null && $CachedString->isHit()) {
                 $this->exists = $CachedString->get();
@@ -128,7 +126,7 @@ class Table extends Model
     {
         $relName = $relName ?: $this->table;
         $patterns = [
-            $this->postgisdb . '_' . $relName . '*',
+            $this->postgisdb . '_' . md5($relName) . '*',
             $this->postgisdb . '*_meta_*',
             $this->postgisdb . '*_legend_*',
         ];
@@ -228,9 +226,8 @@ class Table extends Model
      * @param bool $createKeyFrom
      * @param string|null $schema
      * @return array
-     * @throws PhpfastcacheInvalidArgumentException
      */
-    public function getRecords(bool $createKeyFrom = false, string $schema = null): array
+    public function getRecords(bool $createKeyFrom = false, ?string $schema = null): array
     {
         $response['success'] = true;
         $response['message'] = "Layers loaded";
@@ -243,7 +240,7 @@ class Table extends Model
         if (!empty($schema)) {
             $whereClause = $schema;
         } else {
-            $whereClause = Connection::$param["postgisschema"];
+            $whereClause = $this->postgisschema;
         }
 
         if ($whereClause) {
@@ -308,7 +305,7 @@ class Table extends Model
             $privileges = !empty($row["privileges"]) ? json_decode($row["privileges"]) : null;
             $arr = [];
             $prop = !empty($_SESSION['usergroup']) ? $_SESSION['usergroup'] : $_SESSION['screen_name'];
-            if (empty($_SESSION["subuser"]) || ($prop == Connection::$param['postgisschema'])
+            if (empty($_SESSION["subuser"]) || ($prop == $this->postgisschema)
                 || (!empty($privileges->$prop) && $privileges->$prop != "none")) {
                 $relType = "t"; // Default
                 foreach ($row as $key => $value) {
@@ -418,10 +415,15 @@ class Table extends Model
     {
         $arr = [];
         $sql = "SELECT DISTINCT(\"$field\") as \"distinct\" FROM {$this->doubleQuoteQualifiedName($this->table)} ORDER BY \"$field\"";
-        $res = $this->prepare($sql);
-        $res->execute();
-        while ($row = $this->fetchRow($res)) {
-            $arr[] = $row["distinct"];
+        // We ignore the error here
+        try {
+            $res = $this->prepare($sql);
+            $res->execute();
+            while ($row = $this->fetchRow($res)) {
+                $arr[] = $row["distinct"];
+            }
+        } catch (PDOException $e) {
+            error_log($e->getMessage());
         }
         $response['success'] = true;
         $response['data'] = $arr;
@@ -429,9 +431,11 @@ class Table extends Model
     }
 
     /**
+     * @param string|null $name
      * @return array
+     * @throws InvalidArgumentException
      */
-    public function destroy(string $name = null): array
+    public function destroy(?string $name = null): array
     {
         $table = $name ?? $this->table;
         $this->clearCacheOnSchemaChanges();
@@ -439,11 +443,11 @@ class Table extends Model
         $sql = "DROP TABLE {$this->doubleQuoteQualifiedName($table)} CASCADE;";
         $res = $this->prepare($sql);
         try {
-            $res->execute();
+            $this->execute($res);
         } catch (PDOException) {
             $sql = "DROP VIEW {$this->doubleQuoteQualifiedName($table)} CASCADE;";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
         }
         $response['success'] = true;
         return $response;
@@ -472,6 +476,7 @@ class Table extends Model
      * @param bool $append
      * @return array<bool|string|int>
      * @throws PDOException|InvalidArgumentException
+     * @throws GC2Exception
      */
     public function updateRecord(array $data, string $keyName, bool $raw = false, bool $append = false): array
     {
@@ -508,10 +513,6 @@ class Table extends Model
                     if (in_array($key, ["editable", "skipconflict", "enableows"])) {
                         $value = $value ?: "0";
                     }
-                    if ($key == "_key_" && !empty(App::$param['dontUseGeometryColumnInJoin'])) {
-                        $split = explode('.', $value);
-                        $value = $split[0] . '.' . $split[1];
-                    }
                     if ($key == "tags") {
                         $value = $value ?: [];
                         if (!$raw) {
@@ -534,13 +535,29 @@ class Table extends Model
                             }
                             $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
+                    } if ($key == "fieldconf") {
+                        $value = $value ?: "null";
+                        if (gettype($value) == "string") {
+                            $value = json_decode($value, true);
+                        }
+                        if (!$raw) {
+                            $rec = json_decode($this->getRecordByPri($pKeyValue)["data"]["fieldconf"] ?? '[]', true);
+                            foreach ($value as $fKey => $fValue) {
+                                if (isset($fValue['queryable'])) {
+                                    $fValue['querable'] = $fValue['queryable'];
+                                    unset($fValue['queryable']);
+                                }
+                                $rec[$fKey] = array_merge($rec[$fKey] ?? [],$fValue);
+                            }
+                            $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
+                        }
                     } else {
                         if (is_object($value) || is_array($value)) {
                             $value = json_encode($value, JSON_UNESCAPED_UNICODE);
                         }
                         if ($key == "f_table_abstract") {
                             $keySplit = explode(".", $data[0]['_key_']);
-                            (new Table($keySplit[0] . '.' . $keySplit[1]))->setTableComment($value);
+                            (new Table($keySplit[0] . '.' . $keySplit[1], connection: $this->connection))->setTableComment($value);
                         }
                     }
                 }
@@ -552,8 +569,8 @@ class Table extends Model
 
             $sql = "INSERT INTO " . $this->doubleQuoteQualifiedName($this->table) . " (" . implode(",", $keyArr) . ") VALUES(" . implode(",", $keyArr2) . ")" .
                 " ON CONFLICT ($keyName) DO UPDATE SET " . implode(",", $pairArr);
-            $result = $this->prepare($sql);
-            $result->execute($valueArr);
+            $res = $this->prepare($sql);
+            $this->execute($res, $valueArr);
 
             $response['success'] = true;
             $response['message'] = "Row updated";
@@ -578,10 +595,10 @@ class Table extends Model
         $fieldsForStore = [];
         $columnsForGrid = [];
         $type = "";
-        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : null;
+        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : [];
         foreach ($fieldconfArr as $key => $value) {
             if ($value->properties == "*") {
-                $table = new Table($this->table);
+                $table = new Table($this->table, connection: $this->connection);;
                 $distinctValues = $table->getGroupByAsArray($key);
                 $value->properties = json_encode($distinctValues["data"], JSON_NUMERIC_CHECK, JSON_UNESCAPED_UNICODE);
             }
@@ -682,13 +699,20 @@ class Table extends Model
                     $arr = $this->array_push_assoc($arr, "linksuffix", !empty($fieldconfArr[$key]->linksuffix) ? $fieldconfArr[$key]->linksuffix : null);
                     $arr = $this->array_push_assoc($arr, "template", !empty($fieldconfArr[$key]->template) ? $fieldconfArr[$key]->template : null);
                     $arr = $this->array_push_assoc($arr, "properties", !empty($fieldconfArr[$key]->properties) ? $fieldconfArr[$key]->properties : null);
-                    $arr = $this->array_push_assoc($arr, "ignore", !empty($fieldconfArr[$key]->ignore) && $fieldconfArr[$key]->ignore);
-                    $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable']));
-                    $arr = $this->array_push_assoc($arr, "desc", $this->getColumnComment($key) ?: (!empty($fieldconfArr[$key]->desc) ? $fieldconfArr[$key]->desc : ""));
-                    if ($value['typeObj']['type'] == "decimal") {
-                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ({$value['typeObj']['precision']} {$value['typeObj']['scale']})");
+                    if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
+                        $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable'] ?? false));
                     } else {
-                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']}");
+                        $arr = $this->array_push_assoc($arr, "is_nullable", !isset($fieldconfArr[$key]->is_nullable) ? true : $fieldconfArr[$key]->is_nullable);;
+                    }
+                    $arr = $this->array_push_assoc($arr, "ignore", !empty($fieldconfArr[$key]->ignore) && $fieldconfArr[$key]->ignore);
+                    $arr = $this->array_push_assoc($arr, "desc", $this->getColumnComment($key) ?: (!empty($fieldconfArr[$key]->desc) ? $fieldconfArr[$key]->desc : ""));
+                    if (($value['typeObj']['type'] ?? null) == "decimal") {
+                        $precision = $value['typeObj']['precision'] ?? 10;
+                        $scale = $value['typeObj']['scale'] ?? 3;
+                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ($precision $scale)");
+                    } else {
+                        $type = $value['typeObj']['type'] ?? 'string';
+                        $arr = $this->array_push_assoc($arr, "type", $type);
                     }
                     $response['data'][] = $arr;
                 }
@@ -714,13 +738,13 @@ class Table extends Model
         $this->setType();
         $fieldconfArr = $this->geometryColumns["fieldconf"] === null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($fieldconfArr as $key => $value) {
-            if (!$this->metaData[$key]) {
+            if (!isset($this->metaData[$key]) || !$this->metaData[$key]) {
                 unset($fieldconfArr[$key]);
             }
         }
         $conf['fieldconf'] = json_encode($fieldconfArr, JSON_UNESCAPED_UNICODE);
         $conf['_key_'] = $_key_;
-        $geometryColumnsObj = new Table("settings.geometry_columns_join");
+        $geometryColumnsObj = new Table("settings.geometry_columns_join", connection: $this->connection);;
         return $geometryColumnsObj->updateRecord($conf, "_key_");
     }
 
@@ -742,14 +766,20 @@ class Table extends Model
         $fieldconfArr = $this->geometryColumns["fieldconf"] == null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($data as $value) {
             $safeColumn = $value->column;
-            if ($this->metaData[$value->id]["is_nullable"] != $value->is_nullable && !$onlyRename) {
+            if (($this->metaData[$value->id]["is_nullable"] ?? null) != $value->is_nullable && !$onlyRename) {
                 $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER \"$value->column\" " . ($value->is_nullable ? "DROP" : "SET") . " NOT NULL";
                 $res = $this->prepare($sql);
-                $res->execute();
-                $response['success'] = true;
-                return $response;
+                try {
+                    $res->execute();
+                    $response['success'] = true;
+                    return $response;
+                } catch (PDOException $e) {
+                    if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
+                        throw $e;
+                    }
+                }
             }
-            if ($this->metaData[$value->id]["desc"] !== $value->desc && !$onlyRename) {
+            if (($this->metaData[$value->id]["desc"] ?? null) !== $value->desc && !$onlyRename) {
                 if ($value->desc === "") {
                     $value->desc = null;
                 }
@@ -787,7 +817,7 @@ class Table extends Model
         $conf['fieldconf'] = json_encode($fieldconfArr, JSON_UNESCAPED_UNICODE);
         $conf['_key_'] = $key;
 
-        $geometryColumnsObj = new Table("settings.geometry_columns_join");
+        $geometryColumnsObj = new Table("settings.geometry_columns_join", connection: $this->connection);;
 
         $res = $geometryColumnsObj->updateRecord(json_decode(json_encode($conf, JSON_UNESCAPED_UNICODE), true), "_key_");
         if (!$res["success"]) {
@@ -879,6 +909,9 @@ class Table extends Model
         // We set the data type
         $type = $this->matchType($data['type']);
         $sql .= "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ADD COLUMN \"$safeColumn\" $type";
+        if (!empty($data['identity_generation'])) {
+            $sql .= " GENERATED {$data['identity_generation']} AS IDENTITY";
+        }
         $res = $this->prepare($sql);
         $res->execute();
 
@@ -909,7 +942,7 @@ class Table extends Model
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_end_date TIMESTAMP WITH TIME ZONE DEFAULT NULL";
         $res = $this->prepare($sql);
         $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_uuid UUID NOT NULL DEFAULT uuid_generate_v4()";
+        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_uuid UUID NOT NULL DEFAULT gen_random_uuid()";
         $res = $this->prepare($sql);
         $res->execute();
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_user VARCHAR(255)";
@@ -997,12 +1030,12 @@ class Table extends Model
             $sql = "CREATE TABLE \"$this->postgisschema\".\"$table\" (gid SERIAL PRIMARY KEY,id INT);";
         }
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
         if ($type && $srid) {
             $geomField = 'the_geom';
             $sql = "SELECT AddGeometryColumn('" . $this->postgisschema . "','$table','$geomField',$srid,'$type',2);"; // Must use schema prefix cos search path include public
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $key .= $geomField;
         } else {
             $key .= 'gc2_non_postgis';
@@ -1013,7 +1046,7 @@ class Table extends Model
         }
         $sql = "INSERT into settings.geometry_columns_join (_key_) values (:key) ON CONFLICT DO NOTHING";
         $res = $this->prepare($sql);
-        $res->execute(['key' => $key]);
+        $this->execute($res, ['key' => $key]);
         $this->schema = $this->postgisschema;
         $this->table = $this->postgisschema . '.' . $table;
         $this->tableWithOutSchema = $table;
@@ -1185,7 +1218,11 @@ class Table extends Model
         $sql = "SELECT " . implode(",", $fieldsArr);
         foreach ($this->metaData as $key => $arr) {
             if ($arr['type'] == "bytea") {
-                $sql = str_replace("\"$key\"", "encode(\"" . $key . "\",'escape') as " . $key, $sql);
+                if ($arr['is_array']) {
+                    $sql = str_replace("\"$key\"", "(SELECT array_to_json(array_agg(encode(f, 'escape'))) FROM unnest(\"$key\") AS f) as \"$key\"", $sql);
+                } else {
+                    $sql = str_replace("\"$key\"", "encode(\"" . $key . "\",'escape') as \"$key\"", $sql);
+                }
             }
         }
         $sql .= " FROM " . $this->doubleQuoteQualifiedName($this->table) . " WHERE " . $this->primaryKey['attname'] . "=:pkey";
@@ -1215,7 +1252,11 @@ class Table extends Model
         $sql = "SELECT " . implode(",", $fieldsArr);
         foreach ($this->metaData as $key => $arr) {
             if ($arr['type'] == "bytea") {
-                $sql = str_replace("\"$key\"", "encode(\"" . $key . "\",'escape') as " . $key, $sql);
+                if ($arr['is_array']) {
+                    $sql = str_replace("\"$key\"", "(SELECT array_to_json(array_agg(encode(f, 'escape'))) FROM unnest(\"$key\") AS f) as \"$key\"", $sql);
+                } else {
+                    $sql = str_replace("\"$key\"", "encode(\"" . $key . "\",'escape') as \"$key\"", $sql);
+                }
             }
         }
         $sql .= " FROM " . $this->doubleQuoteQualifiedName($this->table) . " LIMIT 1";
@@ -1407,11 +1448,12 @@ class Table extends Model
      * @param array $columns
      * @param string|null $name
      * @return string
+     * @throws InvalidArgumentException
      */
     public function addPrimaryKeyConstraint(array $columns, ?string $name = null): string
     {
         $this->clearCacheOnSchemaChanges();
-        $name = $name ? self::toAscii($name) : $this->tableWithOutSchema . "_primary";
+        $name = $name ? self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/") : $this->tableWithOutSchema . "_primary";
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD CONSTRAINT \"$name\" PRIMARY KEY (";
         foreach ($columns as $column) {
             $sql .= "\"$column\",";
@@ -1426,12 +1468,13 @@ class Table extends Model
     /**
      * @param array $columns
      * @param string|null $name
-     * @return void
+     * @return string
+     * @throws InvalidArgumentException
      */
     public function addUniqueConstraint(array $columns, ?string $name = null): string
     {
         $this->clearCacheOnSchemaChanges();
-        $name = $name ? self::toAscii($name) : $this->tableWithOutSchema . "_unique";
+        $name = $name ? self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/") : $this->tableWithOutSchema . "_unique";
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD CONSTRAINT \"$name\" UNIQUE (";
         foreach ($columns as $column) {
             $sql .= "\"$column\",";
@@ -1448,12 +1491,13 @@ class Table extends Model
      * @param string $referencedTable
      * @param array|null $referencedColumns
      * @param string|null $name
-     * @return void
+     * @return string
+     * @throws InvalidArgumentException
      */
     public function addForeignConstraint(array $columns, string $referencedTable, ?array $referencedColumns = null, ?string $name = null): string
     {
         $this->clearCacheOnSchemaChanges();
-        $name = $name ? self::toAscii($name) : $this->tableWithOutSchema . "_foreign";
+        $name = $name ? self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/") : $this->tableWithOutSchema . "_foreign";
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD CONSTRAINT \"$name\" FOREIGN KEY (";
         foreach ($columns as $column) {
             $sql .= "\"$column\",";
@@ -1477,12 +1521,13 @@ class Table extends Model
     /**
      * @param string $check
      * @param string|null $name
-     * @return void
+     * @return string
+     * @throws InvalidArgumentException
      */
     public function addCheckConstraint(string $check, ?string $name = null): string
     {
         $this->clearCacheOnSchemaChanges();
-        $name = $name ? self::toAscii($name) : $this->tableWithOutSchema . "_check";
+        $name = $name ? self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/") : $this->tableWithOutSchema . "_check";
         $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD CONSTRAINT \"$name\" CHECK ($check)";
         $res = $this->prepare($sql);
         $res->execute();
@@ -1492,6 +1537,7 @@ class Table extends Model
     /**
      * @param string $name
      * @return void
+     * @throws InvalidArgumentException
      */
     public function dropConstraint(string $name): void
     {
@@ -1609,29 +1655,5 @@ class Table extends Model
     {
         $comments = $this->getColumnComments($this->schema, $this->tableWithOutSchema);
         return $comments[$column];
-    }
-
-    public function installNotifyTrigger(): void
-    {
-        $con = $this->getConstrains($this->schema, $this->tableWithOutSchema, 'p')['data'];
-        if (count($con) == 0) {
-            throw new GC2Exception("Table must have a primary key for emitting real time events", 401);
-        }
-        if (count($con) > 1) {
-            throw new GC2Exception("Table has primary key with multiple columns", 401);
-        }
-        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"$this->schema\".\"$this->tableWithOutSchema\"";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "CREATE TRIGGER _gc2_notify_transaction_trigger AFTER INSERT OR UPDATE OR DELETE ON \"$this->schema\".\"$this->tableWithOutSchema\" FOR EACH ROW EXECUTE PROCEDURE _gc2_notify_transaction('$this->primaryKey', '$this->schema','$this->tableWithOutSchema')";
-        $res = $this->prepare($sql);
-        $res->execute();
-    }
-
-    public function removeNotifyTrigger(): void
-    {
-        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"$this->schema\".\"$this->tableWithOutSchema\"";
-        $res = $this->prepare($sql);
-        $res->execute();
     }
 }

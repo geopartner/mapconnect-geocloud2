@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2021 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -18,16 +19,15 @@ use Phpfastcache\Exceptions\PhpfastcacheLogicException;
 use Psr\Cache\InvalidArgumentException;
 use stdClass;
 
-
 /**
  * Class Setting
  * @package app\models
  */
 class Setting extends Model
 {
-    function __construct()
+    function __construct(?\app\inc\Connection $connection = null)
     {
-        parent::__construct();
+        parent::__construct(connection: $connection);
     }
 
     /**
@@ -262,7 +262,8 @@ class Setting extends Model
     public function get(bool $unsetPw = false): array
     {
         $cacheType = "settings";
-        $cacheId = $this->postgisdb . "_" . $cacheType . "_" . ($_SESSION["screen_name"] ?? ""); // Cache per user because personal API key is stored
+        $user = Model::toAscii(str:$_SESSION['screen_name'] ?? '', skipEmail: false);
+        $cacheId = $this->postgisdb . "_" . $cacheType . "_" . $user; // Cache per user because personal API key is stored
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             $response = $CachedString->get();
@@ -277,7 +278,7 @@ class Setting extends Model
             $arr = $this->getArray();
             if (!empty($_SESSION["subuser"])) {
                 $arr->pw = $arr->pw_subuser->{$_SESSION["screen_name"]} ?? null;
-                $arr->api_key = isset($arr->api_key_subuser) ? $arr->api_key_subuser->{$_SESSION["screen_name"]} : null;
+                $arr->api_key = isset($arr->api_key_subuser) ? $arr->api_key_subuser->{$user} : null;
                 if (isset($arr->pw_subuser)) unset($arr->pw_subuser);
             }
             // If user has no key, we generate one.
@@ -292,13 +293,11 @@ class Setting extends Model
             $response['data'] = $arr;
 
             // Get userGroups from mapcentia database
-            Database::setDb("mapcentia");
-            $users = new Model();
+            $users = new Model(new \app\inc\Connection(database: 'mapcentia'));
             $sQuery = "SELECT * FROM users WHERE parentdb = :parentDb";
+            $users->connect();
             $res = $users->prepare($sQuery);
-            $res->execute([
-                ":parentDb" => $this->postgisdb
-            ]);
+            $this->execute($res, [":parentDb" => $this->postgisdb]);
             $rows = $this->fetchAll($res);
             $userGroups = [];
             foreach ($rows as $row) {

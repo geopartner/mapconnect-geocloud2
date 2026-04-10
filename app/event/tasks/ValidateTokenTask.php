@@ -1,4 +1,10 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
 namespace app\event\tasks;
 
@@ -13,7 +19,8 @@ use Exception;
 
 error_reporting(E_ERROR | E_PARSE);
 
-readonly class ValidateTokenTask implements Task
+
+final readonly class ValidateTokenTask implements Task
 {
 
     public function __construct(private string $token)

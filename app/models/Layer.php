@@ -1,8 +1,7 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2024 MapCentia ApS
- * @copyright  2025 Geopartner Landinspektører A/S
+ * @copyright  2013-2025 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -10,9 +9,9 @@
 namespace app\models;
 
 use app\conf\App;
-use app\conf\Connection;
 use app\exceptions\GC2Exception;
 use app\inc\Cache;
+use app\inc\Connection;
 use app\inc\Globals;
 use app\inc\Session;
 use PDO;
@@ -28,9 +27,9 @@ use Psr\Cache\InvalidArgumentException;
  */
 class Layer extends Table
 {
-    function __construct()
+    function __construct(public ?Connection $connection = null)
     {
-        parent::__construct("settings.geometry_columns_view");
+        parent::__construct(table: "settings.geometry_columns_view", connection: $this->connection);;
     }
 
     /**
@@ -52,7 +51,7 @@ class Layer extends Table
     private function clearCacheOfColumns($relName): void
     {
         $patterns = [
-            $this->postgisdb . '_' . $relName . '_columns',
+            $this->postgisdb . '_' . md5($relName) . '_columns',
         ];
         Cache::deleteByPatterns($patterns);
     }
@@ -66,7 +65,7 @@ class Layer extends Table
     {
         $sql = "select f_geometry_column from settings.geometry_columns_view where f_table_name=:table and f_table_schema=:schema";
         $res = $this->prepare($sql);
-        $res->execute(['table' => $table, 'schema' => $schema]);
+        $this->execute($res, ['table' => $table, 'schema' => $schema]);
         return $res->fetchAll(PDO::FETCH_COLUMN);
     }
 
@@ -79,7 +78,7 @@ class Layer extends Table
     {
         $sql = "select distinct privileges from settings.geometry_columns_view where f_table_name=:table and f_table_schema=:schema";
         $res = $this->prepare($sql);
-        $res->execute(['table' => $table, 'schema' => $schema]);
+        $this->execute($res, ['table' => $table, 'schema' => $schema]);
         $privileges = $res->fetchAll(PDO::FETCH_COLUMN);
         $response = [];
         foreach ($privileges as $privilege) {
@@ -100,7 +99,7 @@ class Layer extends Table
     {
         $sql = "select $column from $this->table where _key_=:key";
         $res = $this->prepare($sql);
-        $res->execute(['key' => $_key_]);
+        $this->execute($res, ['key' => $_key_]);
         $row = $this->fetchRow($res);
         return $row[$column];
     }
@@ -113,20 +112,21 @@ class Layer extends Table
      * @param bool|null $parse
      * @param bool|null $es
      * @param bool|null $lookupForeignTables
+     * @param array|null $jwt
      * @return array
      * @throws GC2Exception
      * @throws PhpfastcacheInvalidArgumentException
      */
-    public function getAll(string $db, ?bool $auth, ?string $query = null, ?bool $includeExtent = false, ?bool $parse = false, ?bool $es = false, ?bool $lookupForeignTables = true): array
+    public function getAll(string $db, ?bool $auth, ?string $query = null, ?bool $includeExtent = false, ?bool $parse = false, ?bool $es = false, ?bool $lookupForeignTables = true, ?array $jwt = null): array
     {
         // If user is signed in with another user than the requested,
         // when consider the user as not signed in.
-        if ($db != Session::getUser()) {
-            //$auth = null;
+        if ($auth && (Session::isAuth() && $db != Session::getDatabase())) {
+            throw new GC2Exception("User is not authorized to access this database", 401, null, "USER_NOT_AUTHORIZED");
         }
 
         $cacheType = "meta";
-        $cacheId = ($this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es));
+        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es);
 
         $CachedString = Cache::getItem($cacheId);
 
@@ -195,30 +195,30 @@ class Layer extends Table
             $sql = implode(" UNION ALL ", $sqls);
 
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
 
             // Check if Es is online
             // =====================
             $esOnline = false;
-            //$split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
-            //if (!empty($split[2])) {
-            //    $port = $split[2];
-            //} else {
-            //    $port = "9200";
-            //}
-            //$esUrl = $split[0] . ":" . $split[1] . ":" . $port;
-            //$ch = curl_init($esUrl);
-            //curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
-            //curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
-            //curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            //curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
-            //curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
-            //curl_exec($ch);
-            //$httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            //curl_close($ch);
-            //if ($httpcode == "200") {
-            //    $esOnline = true;
-            //}
+            $split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
+            if (!empty($split[2])) {
+                $port = $split[2];
+            } else {
+                $port = "9200";
+            }
+            $esUrl = $split[0] . ":" . $split[1] . ":" . $port;
+            $ch = curl_init($esUrl);
+            curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
+            curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
+            curl_exec($ch);
+            $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            if ($httpcode == "200") {
+                $esOnline = true;
+            }
 
             while ($row = $this->fetchRow($res)) {
                 // TODO Here check privileges and continue loop if user doesn't has access
@@ -238,13 +238,13 @@ class Layer extends Table
                     $srsTmp = "3857";
                     $sqls = "SELECT ST_Xmin(ST_Extent(public.ST_Transform(\"" . $row['f_geometry_column'] . "\",$srsTmp))) AS xmin,ST_Xmax(ST_Extent(public.ST_Transform(\"" . $row['f_geometry_column'] . "\",$srsTmp))) AS xmax, ST_Ymin(ST_Extent(public.ST_Transform(\"" . $row['f_geometry_column'] . "\",$srsTmp))) AS ymin,ST_Ymax(ST_Extent(public.ST_Transform(\"" . $row['f_geometry_column'] . "\",$srsTmp))) AS ymax  FROM {$row['f_table_schema']}.{$row['f_table_name']}";
                     $resExtent = $this->prepare($sqls);
-                    $resExtent->execute();
+                    $this->execute($resExtent);
                     $extent = $this->fetchRow($resExtent);
                 }
                 $restrictions = [];
                 foreach ($row as $key => $value) {
                     // Set empty strings to NULL
-                    $value = $value === "" ? null : $value;
+                    $value = $value == "" ? null : $value;
                     if ($key == "type" && $value == "GEOMETRY") {
                         $def = isset($row['def']) ? json_decode($row['def'], true) : [];
                         if (isset($def['geotype']) && $def['geotype'] != "Default") {
@@ -367,14 +367,20 @@ class Layer extends Table
                 }
                 $fields = $this->getMetaData($rel, false, true, $restrictions, null, true, $lookupForeignTables);
 
-                // If column comment is empty, we output from field conf
                 foreach ($fields as $key => $field) {
-                    if (empty($field['comment'])) {
+                    // If column comment is empty, we output from field conf
+                    if (empty($field['comment']) && isset($fieldConf[$key]['desc'])) {
                         $fields[$key]['comment'] = $fieldConf[$key]['desc'];
                     }
-                    $fields[$key]['alias'] = $fieldConf[$key]['alias'];
-                    $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
-                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    if (isset($fieldConf[$key]['alias'])) {
+                        $fields[$key]['alias'] = $fieldConf[$key]['alias'];
+                    }
+                    if (isset($fieldConf[$key]['querable'])) {
+                        $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
+                    }
+                    if (isset($fieldConf[$key]['sort_id'])) {
+                        $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    }
                 }
 
                 // Sort fields
@@ -409,11 +415,15 @@ class Layer extends Table
                 }
 
                 // If session is sub-user we always check privileges
-                if (isset($_SESSION["subuser"]) && $_SESSION["subuser"]) {
+                $subUser = $_SESSION["subuser"] ?? !($jwt['superUser'] ?? true);
+                $userName = $_SESSION["screen_name"] ?? $jwt['uid'] ?? null;
+                $userGroup = $_SESSION["usergroup"] ?? $jwt['userGroup'] ?? null;
+
+                if ($subUser) {
                     $privileges = (array)json_decode($row["privileges"]);
-                    if (($privileges[$_SESSION['usergroup'] ?: $_SESSION['screen_name']] != "none" && $privileges[$_SESSION['usergroup'] ?: $_SESSION['screen_name']])) {
+                    if (($privileges[$userGroup ?: $userName] != "none" && $privileges[$userGroup ?: $userName])) {
                         $response['data'][] = $arr;
-                    } elseif ($_SESSION['screen_name'] == $schema || $_SESSION['usergroup'] == $schema) {
+                    } elseif ($userName == $schema || $userGroup == $schema) {
                         $response['data'][] = $arr;
                         // Always add layers with Write and None.
                     } elseif ($row["authentication"] == "None" || $row["authentication"] == "Write") {
@@ -456,24 +466,6 @@ class Layer extends Table
             Cache::save($CachedString);
             $response["cache"]["hit"] = false;
         }
-        return $response;
-    }
-
-    /**
-     * Secure. Using now user input.
-     * @return array
-     */
-    public function getSchemas(): array
-    {
-        $response = [];
-        $arr = [];
-        $sql = "SELECT f_table_schema AS schemas FROM settings.geometry_columns_view WHERE f_table_schema IS NOT NULL AND f_table_schema!='sqlapi' GROUP BY f_table_schema";
-        $result = $this->execQuery($sql);
-        while ($row = $this->fetchRow($result)) {
-            $arr[] = array("schema" => $row["schemas"], "desc" => null);
-        }
-        $response['success'] = true;
-        $response['data'] = $arr;
         return $response;
     }
 
@@ -557,16 +549,18 @@ class Layer extends Table
     }
 
     /**
-     * @param $tableName
-     * @param $data
-     * @return array
-     * @throws GC2Exception|InvalidArgumentException
+     * Renames a database table to a new specified name.
+     *
+     * @param string $tableName The current name of the table, including the schema (e.g., "schema.table").
+     * @param string $newTableName The desired new name of the table.
+     * @return array<string, mixed> Returns an array containing the success status, a message, and the new table name.
+     * @throws GC2Exception|InvalidArgumentException If the rename operation or any related query execution fails due to a database error.
      */
-    public function rename($tableName, $data): array
+    public function rename(string $tableName, string $newTableName): array
     {
         $this->clearCacheOnSchemaChanges();
         $split = explode(".", $tableName);
-        $newName = self::toAscii($data->name, array(), "_");
+        $newName = self::toAscii($newTableName, [], "_");
         if (is_numeric(mb_substr($newName, 0, 1, 'utf-8'))) {
             $newName = "_" . $newName;
         }
@@ -575,12 +569,12 @@ class Layer extends Table
         $query = "SELECT * FROM settings.getColumns('$whereClauseG','$whereClauseR') ORDER BY sort_id";
         $res = $this->prepare($query);
         try {
-            $res->execute();
+            $this->execute($res);
             while ($row = $this->fetchRow($res)) {
                 $query = "UPDATE settings.geometry_columns_join SET _key_ = '{$row['f_table_schema']}.$newName.{$row['f_geometry_column']}' WHERE _key_ ='{$row['f_table_schema']}.{$row['f_table_name']}.{$row['f_geometry_column']}'";
                 $resUpdate = $this->prepare($query);
                 try {
-                    $resUpdate->execute();
+                    $this->execute($resUpdate);
                 } catch (PDOException $e) {
                     throw new GC2Exception($e->getMessage(), 400, null);
                 }
@@ -588,7 +582,7 @@ class Layer extends Table
             $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($tableName) . " RENAME TO $newName";
             $res = $this->prepare($sql);
             try {
-                $res->execute();
+                $this->execute($res);
             } catch (PDOException $e) {
                 throw new GC2Exception($e->getMessage(), 400, null);
             }
@@ -602,12 +596,14 @@ class Layer extends Table
     }
 
     /**
-     * @param $tables
-     * @param $schema
-     * @return array
-     * @throws InvalidArgumentException
+     * Updates the schema of the specified tables and performs necessary data migrations.
+     *
+     * @param array<string> $tables List of fully qualified table names to move, in the format "schema.table".
+     * @param string $schema The target schema to which the tables should be moved.
+     * @return array<string, mixed> An array containing the success status and a message.
+     * @throws PhpfastcacheInvalidArgumentException
      */
-    public function setSchema($tables, $schema): array
+    public function setSchema(array $tables, string $schema): array
     {
         $this->clearCacheOnSchemaChanges();
         foreach ($tables as $table) {
@@ -616,19 +612,19 @@ class Layer extends Table
             $whereClauseR = "r_table_schema=''$bits[0]'' AND r_table_name=''$bits[1]''";
             $query = "SELECT * FROM settings.getColumns('$whereClauseG','$whereClauseR') ORDER BY sort_id";
             $res = $this->prepare($query);
-            $res->execute();
+            $this->execute($res);
             while ($row = $this->fetchRow($res)) {
-                // First delete keys from destination schema if they exists
+                // First, delete keys from destination schema if they exist
                 $query = "DELETE FROM settings.geometry_columns_join WHERE _key_ = '$schema.$bits[1].{$row['f_geometry_column']}'";
                 $resDelete = $this->prepare($query);
-                $resDelete->execute();
+                $this->execute($resDelete);
                 $query = "UPDATE settings.geometry_columns_join SET _key_ = '$schema.$bits[1].{$row['f_geometry_column']}' WHERE _key_ ='$bits[0].$bits[1].{$row['f_geometry_column']}'";
                 $resUpdate = $this->prepare($query);
-                $resUpdate->execute();
+                $this->execute($resUpdate);
             }
             $query = "ALTER TABLE " . $this->doubleQuoteQualifiedName($table) . " SET SCHEMA $schema";
             $res = $this->prepare($query);
-            $res->execute();
+            $this->execute($res);
         }
         $response['success'] = true;
         $response['message'] = sizeof($tables) . " tables moved to $schema";
@@ -636,10 +632,11 @@ class Layer extends Table
     }
 
     /**
-     * @param array $tables
-     * @return array
-     * @throws InvalidArgumentException
-     * @throws GC2Exception
+     * Deletes the specified tables or views from the schema.
+     *
+     * @param array<string> $tables An array of table or view names to be deleted.
+     * @return array<string, mixed> An associative array containing the success status and a message.
+     * @throws GC2Exception|InvalidArgumentException
      */
     public function delete(array $tables): array
     {
@@ -651,13 +648,7 @@ class Layer extends Table
             $type = $check["data"];
             $query = "DROP $type " . $this->doubleQuoteQualifiedName($table) . " CASCADE";
             $res = $this->prepare($query);
-            // Delete package from CKAN
-            if (isset(App::$param["ckan"])) {
-                $uuid = $this->getUuid($table);
-                $ckanRes = $this->deleteCkan($uuid["uuid"]);
-                $response['ckan_delete'] = $ckanRes["success"];
-            }
-            $res->execute();
+            $this->execute($res);
         }
         $this->commit();
         $response['success'] = true;
@@ -666,15 +657,12 @@ class Layer extends Table
     }
 
     /**
-     * @param string $_key_
-     * @return array
+     * @param string $_key_ The key used to fetch privileges, potentially modified based on configuration settings.
+     * @return array<string, mixed> An associative array containing success flag, privileges data, and optional message.
+     * @throws PhpfastcacheInvalidArgumentException
      */
     public function getPrivileges(string $_key_): array
     {
-        if (!empty(App::$param['dontUseGeometryColumnInJoin'])) {
-            $split = explode('.', $_key_);
-            $_key_ = $split[0] . '.' . $split[1];
-        }
         $privileges = json_decode($this->getValueFromKey($_key_, "privileges") ?: "{}");
         if (!empty(Session::get())) {
             $arr = Session::getByKey('subusers');
@@ -686,7 +674,7 @@ class Layer extends Table
         }
         foreach ($arr as $subuser) {
             $privileges->$subuser = $privileges->$subuser ?? "none";
-            if ($subuser != Connection::$param['postgisschema']) {
+            if ($subuser != $this->schema) {
                 $response['data'][] = array("subuser" => $subuser, "privileges" => $privileges->$subuser, "group" => Session::getByKey("usergroups")[$subuser]);
             }
         }
@@ -728,45 +716,55 @@ class Layer extends Table
                 $table->updateRecord($privileges, "_key_");
             }
         }
-
         $response['success'] = true;
         $response['message'] = "Privileges updates";
         return $response;
     }
 
-    /**
-     * @param string $key
-     * @return array
-     */
-    public function updateLastmodified(string $key): array
+    public function setPrivilegesOnAll(string $subuser, string $privilege): void
     {
-        $response = [];
-        $date = date('Y-m-d H:i:s');
-        $sql = "UPDATE settings.geometry_columns_join set lastmodified=:date WHERE _key_=:key";
-        try {
-            $result = $this->prepare($sql);
-            $result->execute(["date" => $date, "key" => $key]);
-            $response['success'] = true;
-            $response['message'] = "Last modified value updated";
-        } catch (PDOException $e) {
-            $response['success'] = false;
-            $response['message'] = $e->getMessage();
-            $response['code'] = 401;
-            return $response;
-        }
-        return $response;
+        (new User($subuser))->doesUserExist();
+        $this->clearCacheOnSchemaChanges();
+        $path = "{" . $subuser . "}";
+        $privilege = "\"" . $privilege . "\"";
+        $sql = "update settings.geometry_columns_join set privileges = jsonb_set(privileges, :path, :privilege)";
+        $res = $this->prepare($sql);
+        $this->execute($res, ["path" => $path, "privilege" => $privilege]);
     }
 
     /**
-     * @param string $_key_
-     * @return array<array|bool|string>
+     * Updates the last modified timestamp for geometry columns in a specific schema and table.
+     *
+     * @param string $schema The name of the schema containing the table.
+     * @param string $table The name of the table whose geometry columns need to be updated.
+     * @return void
+     * @throws GC2Exception If no geometry columns are found in the specified table.
+     */
+    public function updateLastmodified(string $schema, string $table): void
+    {
+        $date = date('Y-m-d H:i:s');
+        $geomCols = $this->getGeometryColumnsFromTable($schema, $table);
+        if (sizeof($geomCols) == 0) {
+            throw new GC2Exception('columns not found');
+        }
+        foreach ($geomCols as $geomCol) {
+            $k = $schema . '.' . $table . '.' . $geomCol;
+            $sql = "UPDATE settings.geometry_columns_join set lastmodified=:date WHERE _key_=:key";
+            $res = $this->prepare($sql);
+            $this->execute($res, ["date" => $date, "key" => $k]);
+        }
+    }
+
+    /**
+     * @param string $_key_ The key used to retrieve roles from the storage.
+     * @return array<string, mixed> An array containing the success status, message, and a list of subuser roles.
      */
     public function getRoles(string $_key_): array
     {
         $roles = json_decode($this->getValueFromKey($_key_, "roles") ?: "{}");
         foreach ($_SESSION['subusers'] as $subuser) {
             $roles->$subuser = $roles->$subuser ?? "none";
-            if ($subuser != Connection::$param['postgisschema']) {
+            if ($subuser != $this->schema) {
                 $response['data'][] = array("subuser" => $subuser, "roles" => $roles->$subuser);
             }
         }
@@ -779,9 +777,12 @@ class Layer extends Table
     }
 
     /**
-     * @param object $data
-     * @return array<bool|string|int>
-     * @throws PhpfastcacheInvalidArgumentException|InvalidArgumentException
+     * Updates roles for a given key and subuser.
+     *
+     * @param object $data Data object containing the key, subuser, and roles to update.
+     * @return array<string, mixed> Response array with success status and message.
+     * @throws InvalidArgumentException
+     * @throws GC2Exception
      */
     public function updateRoles(object $data): array
     {
@@ -798,24 +799,6 @@ class Layer extends Table
     }
 
     /**
-     * @param string $_key_
-     * @param string $srs
-     * @return array
-     */
-    public function getExtent(string $_key_, string $srs = "4326"): array
-    {
-        $split = explode(".", $_key_);
-        $srsTmp = $srs;
-        $sql = "SELECT ST_Xmin(ST_Extent(public.ST_Transform(\"" . $split[2] . "\",$srsTmp))) AS xmin,ST_Xmax(ST_Extent(public.ST_Transform(\"" . $split[2] . "\",$srsTmp))) AS xmax, ST_Ymin(ST_Extent(public.ST_Transform(\"" . $split[2] . "\",$srsTmp))) AS ymin,ST_Ymax(ST_Extent(public.ST_Transform(\"" . $split[2] . "\",$srsTmp))) AS ymax  FROM $split[0].$split[1]";
-        $resExtent = $this->prepare($sql);
-        $resExtent->execute();
-        $extent = $this->fetchRow($resExtent);
-        $response['success'] = true;
-        $response['extent'] = $extent;
-        return $response;
-    }
-
-    /**
      * @throws PhpfastcacheInvalidArgumentException
      */
     public function getEstExtent($_key_, $srs = "4326"): array
@@ -824,9 +807,9 @@ class Layer extends Table
         $nativeSrs = $this->getGeometryColumns($split[0] . "." . $split[1], "srid");
         $sql = "WITH bb AS (SELECT ST_astext(ST_Transform(ST_setsrid(ST_EstimatedExtent('" . $split[0] . "', '" . $split[1] . "', '" . $split[2] . "')," . $nativeSrs . ")," . $srs . ")) as geom) ";
         $sql .= "SELECT ST_Xmin(ST_Extent(geom)) AS TXMin,ST_Xmax(ST_Extent(geom)) AS TXMax, ST_Ymin(ST_Extent(geom)) AS TYMin,ST_Ymax(ST_Extent(geom)) AS TYMax  FROM bb";
-        $result = $this->prepare($sql);
-        $result->execute();
-        $row = $this->fetchRow($result);
+        $res = $this->prepare($sql);
+        $this->execute($res);
+        $row = $this->fetchRow($res);
         $extent = array("xmin" => $row['txmin'], "ymin" => $row['tymin'], "xmax" => $row['txmax'], "ymax" => $row['tymax']);
         $response['success'] = true;
         $response['extent'] = $extent;
@@ -834,35 +817,16 @@ class Layer extends Table
     }
 
     /**
-     * @param string $_key_
-     * @param string $srs
-     * @return array
-     */
-    public function getEstExtentAsGeoJSON(string $_key_, string $srs = "4326"): array
-    {
-        $split = explode(".", $_key_);
-        $nativeSrs = $this->getGeometryColumns($split[0] . "." . $split[1], "srid");
-        $sql = "SELECT ST_asGeojson(ST_Transform(ST_setsrid(ST_EstimatedExtent('" . $split[0] . "', '" . $split[1] . "', '" . $split[2] . "')," . $nativeSrs . ")," . $srs . ")) as geojson";
-        $result = $this->prepare($sql);
-        $result->execute();
-        $row = $this->fetchRow($result);
-        $extent = $row["geojson"];
-        $response['success'] = true;
-        $response['extent'] = $extent;
-        return $response;
-    }
-
-    /**
-     * @param string $_key_
-     * @return array
+     * @param string $_key_ The key used to determine the table and schema in the format "schema.table".
+     * @return array<string, mixed> An associative array containing a success flag and the count of records from the specified table.
      */
     public function getCount(string $_key_): array
     {
         $split = explode(".", $_key_);
         $sql = "SELECT count(*) AS count FROM " . $split[0] . "." . $split[1];
-        $result = $this->prepare($sql);
-        $result->execute();
-        $row = $this->fetchRow($result);
+        $res = $this->prepare($sql);
+        $this->execute($res);
+        $row = $this->fetchRow($res);
         $count = $row['count'];
         $response['success'] = true;
         $response['count'] = $count;
@@ -870,17 +834,21 @@ class Layer extends Table
     }
 
     /**
-     * @param string $to
-     * @param string $from
-     * @return array
-     * @throws InvalidArgumentException
+     * Copies metadata from a specified source key to multiple target keys in the database.
+     *
+     * @param string $from The source key from which metadata will be copied.
+     * @param object $data An object containing metadata fields and target keys.
+     *                     The `fields` property is an array specifying which fields to copy,
+     *                     and the `keys` property is an array of target keys.
+     * @return array<bool|string> Returns an array indicating success with a boolean value.
+     *                            If the operation fails, it includes an error message and a status code.
      */
     public function copyMeta(string $from, object $data): array
     {
         $this->clearCacheOnSchemaChanges();
         $query = "SELECT * FROM settings.geometry_columns_join WHERE _key_ =:from";
         $res = $this->prepare($query);
-        $res->execute(array("from" => $from));
+        $this->execute($res, array("from" => $from));
         $row = $this->fetchRow($res);
         foreach ($data->keys as $to) {
             $booleanFields = array("editable", "baselayer", "tilecache", "not_querable", "single_tile", "enablesqlfilter", "skipconflict", "enableows");
@@ -923,262 +891,13 @@ class Layer extends Table
     }
 
     /**
-     * @param string $key
-     * @param string $gc2Host
-     * @return array
-     * @throws PhpfastcacheInvalidArgumentException
-     */
-    public function updateCkan(string $key, string $gc2Host): array
-    {
-        $gc2Host = $gc2Host ?: App::$param["host"];
-        $metaConfig = App::$param["metaConfig"];
-        $ckanApiUrl = App::$param["ckan"]["host"];
-
-        $sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_ =:key";
-        $res = $this->prepare($sql);
-        $res->execute(array("key" => $key));
-        $row = $this->fetchRow($res);
-        $id = $row["uuid"];
-        // Check if dataset already exists
-        $ch = curl_init($ckanApiUrl . "/api/3/action/package_show?id=" . $id);
-        curl_setopt($ch, CURLOPT_NOBODY, true);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HEADER, true);
-        curl_exec($ch);
-        $info = curl_getinfo($ch);
-        $datasetExists = $info["http_code"] == 200;
-        curl_close($ch);
-
-        // Create the CKAN package objectuu
-        $arr = array();
-
-        if ($row["tags"]) {
-            foreach (json_decode($row["tags"]) as $v) {
-                $arr[] = array("name" => $v);
-            }
-        }
-
-        // Get the default "ckan_org_id" value
-        $ckanOrgIdDefault = null;
-        foreach ($metaConfig as $value) {
-            if (!empty($value["name"]) == "ckan_org_id") {
-                $ckanOrgIdDefault = $value["default"];
-            }
-        }
-
-        // Get the default "update" flag
-        $updateDefault = null;
-        foreach ($metaConfig as $value) {
-            if (!empty($value["name"]) == "ckan_update") {
-                $updateDefault = $value["default"];
-            }
-        }
-
-        // Get the default "update" value
-        $licenseIdDefault = null;
-        foreach ($metaConfig as $value) {
-            if (!empty($value["name"]) == "license_id") {
-                $licenseIdDefault = $value["default"];
-            }
-        }
-
-        if (isset(json_decode($row["meta"], true)["ckan_update"])) {
-            $update = json_decode($row["meta"], true)["ckan_update"];
-        } else {
-            $update = $updateDefault;
-        }
-
-        if (!$update) {
-            $response['success'] = false;
-            $response['message'] = "Dataset not flagged for CKAN";
-            $response['code'] = 401;
-            return $response;
-        }
-
-        $ownerOrg = json_decode($row["meta"], true)["ckan_org_id"] ?: $ckanOrgIdDefault;
-
-        $qualifiedName = $row["f_table_schema"] . "." . $row["f_table_name"];
-
-        $widgetUrl = $gc2Host . "/apps/widgets/gc2map/" . Database::getDb() . "/" . $row["f_table_schema"] . "/" . App::$param["ckan"]["widgetState"] . "/" . $qualifiedName;
-        $response = array();
-        if ($datasetExists) {
-            $response["id"] = $id;
-        }
-        $response["name"] = $id;
-        $response["title"] = $row["f_table_title"];
-        $response["license_id"] = json_decode($row["meta"], true)["license_id"] ?: $licenseIdDefault;
-        $response["notes"] = (isset(json_decode($row["meta"])->meta_desc) && trim(json_decode($row["meta"])->meta_desc) != "") ? json_decode($row["meta"])->meta_desc : $row["f_table_abstract"];
-        if (sizeof($arr) > 0) $response["tags"] = $arr;
-        $response["owner_org"] = $ownerOrg;
-        $response["resources"] = array(
-            array(
-                "id" => $id . "-html",
-                "name" => "Web widget",
-                "description" => "Html side til indlejring eller link",
-                "format" => "html",
-                "url" => $widgetUrl,
-            ),
-            array(
-                "id" => $id . "-geojson",
-                "name" => "GeoJSON",
-                "description" => App::$param["ckan"]["descForGeoJson"],
-                "format" => "geojson",
-                "url" => $gc2Host . "/api/v2/sql/" . Database::getDb() . "?q=SELECT * FROM " . $qualifiedName . " LIMIT 1000&srs=4326"
-            ),
-            array(
-                "id" => $id . "-wms",
-                "name" => "WMS",
-                "description" => "OGC WMS op til version 1.3.0",
-                "format" => "wms",
-                "url" => $gc2Host . "/ows/" . Database::getDb() . "/" . $row["f_table_schema"] . "?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities"
-            ),
-            array(
-                "id" => $id . "-wfs",
-                "name" => "WFS",
-                "description" => "OGC WFS op til version 2.0.0",
-                "format" => "wfs",
-                "url" => $gc2Host . "/ows/" . Database::getDb() . "/" . $row["f_table_schema"] . "?SERVICE=WFS&VERSION=2.0&REQUEST=GetCapabilities"
-            ),
-            array(
-                "id" => $id . "_wmts",
-                "name" => "WMTS",
-                "description" => "OGC WMTS version 1.0",
-                "format" => "wmts",
-                "url" => $gc2Host . "/mapcache/" . Database::getDb() . "/wmts/1.0.0/WMTSCapabilities.xml"
-            ),
-            array(
-                "id" => $id . "-xyz",
-                "name" => "XYZ",
-                "description" => "Google XYZ service",
-                "format" => "xyz",
-                "url" => $gc2Host . "/mapcache/" . Database::getDb() . "/gmaps/" . $qualifiedName . "@g"
-            ),
-            array(
-                "id" => $id . "-csv",
-                "name" => "CSV",
-                "description" => App::$param["ckan"]["descForCSV"],
-                "format" => "csv",
-                "url" => $gc2Host . "/api/v2/sql/" . Database::getDb() . "?q=SELECT * FROM " . $qualifiedName . " LIMIT 1000&srs=4326&format=csv&allstr=1&alias=" . $qualifiedName
-            ),
-            array(
-                "id" => $id . "-excel",
-                "name" => "XLSX",
-                "description" => App::$param["ckan"]["descForExcel"],
-                "format" => "xlsx",
-                "url" => $gc2Host . "/api/v2/sql/" . Database::getDb() . "?q=SELECT * FROM " . $qualifiedName . " LIMIT 1000&srs=4326&format=excel&alias=" . $qualifiedName
-            ),
-        );
-
-        // Get extent
-        $extent = $this->getEstExtentAsGeoJSON($key);
-        $extentStr = "";
-        if ($extent["success"]) {
-            $extentStr = $extent["extent"];
-        }
-
-        // Get count
-        $count = $this->getCount($key);
-        $countStr = "";
-        if ($count["success"]) {
-            $countStr = $count["count"];
-        }
-
-        $response["extras"] = array(
-            array(
-                "key" => "spatial",
-                "value" => $extentStr
-            ),
-            array(
-                "key" => "Antal objekter",
-                "value" => $countStr
-            ),
-            array(
-                "key" => "Data oprettet",
-                "value" => $row["created"]
-            ),
-        );
-        $requestJson = json_encode($response);
-        $ch = curl_init($ckanApiUrl . "/api/3/action/package_" . ($datasetExists ? "patch" : "create"));
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $requestJson);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Content-Length: ' . strlen($requestJson),
-                'Authorization: ' . App::$param["ckan"]["apiKey"]
-            )
-        );
-        $packageBuffer = curl_exec($ch);
-        $info = curl_getinfo($ch);
-        curl_close($ch);
-        if ($info["http_code"] == 200) {
-            // Get list of resource views, so we can see if the views already exists
-            $ch = curl_init($ckanApiUrl . "/api/3/action/resource_view_list?id=" . $id . "-html");
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "GET");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-            $viewArr = json_decode(curl_exec($ch), true);
-            curl_close($ch);
-
-            // Set flags
-            $webViewId1 = (isset($viewArr["result"][0]["id"])) ? $viewArr["result"][0]["id"] : null;
-
-            // Webpage view for widget
-            $response = array();
-            if ($webViewId1) {
-                $response["id"] = $webViewId1;
-            }
-            $response["resource_id"] = $id . "-html";
-            $response["title"] = $row["f_table_title"] ?: $row["f_table_name"];
-            $response["description"] = $row["f_table_abstract"];
-            $response["view_type"] = "webpage_view";
-            $response["page_url"] = $widgetUrl;
-            $requestJson = json_encode($response);
-            $ch = curl_init($ckanApiUrl . "/api/3/action/resource_view_" . ($webViewId1 ? "update" : "create"));
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $requestJson);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                    'Content-Type: application/json',
-                    'Content-Length: ' . strlen($requestJson),
-                    'Authorization: ' . App::$param["ckan"]["apiKey"]
-                )
-            );
-            curl_exec($ch);
-            curl_close($ch);
-
-        }
-        $response['json'] = $packageBuffer;
-        return $response;
-    }
-
-    public static function deleteCkan($key)
-    {
-        $ckanApiUrl = App::$param["ckan"]["host"];
-        $requestJson = json_encode(array("id" => $key));
-        $ch = curl_init($ckanApiUrl . "/api/3/action/package_delete");
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $requestJson);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Content-Length: ' . strlen($requestJson),
-                'Authorization: ' . App::$param["ckan"]["apiKey"]
-            )
-        );
-        $buffer = curl_exec($ch);
-        curl_close($ch);
-        return json_decode($buffer, true);
-    }
-
-    /**
      * @return array
      */
     public function getTags(): array
     {
         $sql = "SELECT tags FROM settings.geometry_columns_join WHERE tags NOTNULL AND tags <> 'null' AND tags <> '\"null\"'";
         $res = $this->prepare($sql);
-        $res->execute();
-
+        $this->execute($res);
         $arr = array();
         while ($row = $this->fetchRow($res)) {
             if (isset($row["tags"]) && json_decode($row["tags"])) {
@@ -1196,36 +915,86 @@ class Layer extends Table
     }
 
     /**
-     * @param string $field
-     * @return array
+     * @param string $field The database field used for grouping the results.
+     * @return array<bool|array<array<string, mixed>>> An array containing the success status and the grouped data retrieved from the database.
+     * @throws DatabaseException If there is an error executing the database query.
      */
     public function getGroups(string $field): array
     {
         $arr = [];
         $sql = "SELECT $field AS $field FROM settings.geometry_columns_join WHERE $field IS NOT NULL GROUP BY $field";
         $res = $this->prepare($sql);
-        $res->execute();
-
+        $this->execute($res);
         while ($row = $this->fetchRow($res)) {
             $arr[] = array("group" => $row[$field]);
         }
         $response['success'] = true;
         $response['data'] = $arr;
-
         return $response;
     }
 
+    /**
+     * Inserts default metadata into the `settings.geometry_columns_join` table for rows
+     * in the `settings.geometry_columns_view` where the `_key_` field is null and the key
+     * does not begin with an underscore.
+     *
+     * This method prepares and executes an SQL statement to perform the insertion operation
+     * and returns the operation's success status and the number of affected rows.
+     *
+     * @return array<string, mixed> Associative array containing the success status as a boolean
+     *                              and the count of rows affected by the insertion.
+     */
     public function insertDefaultMeta(): array
     {
-        $sql = "with t as (select f_table_schema || '.' || f_table_name || '.' || f_geometry_column as key
+        $key = "f_table_schema || '.' || f_table_name || '.' || f_geometry_column";
+        $sql = "with t as (select $key as key
                     from settings.geometry_columns_view
                     where _key_ isnull)
                 insert into settings.geometry_columns_join(_key_) select * from t where left(key, 1) != '_'";
 
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
         $response['success'] = true;
         $response['count'] = $res->rowCount();
         return $response;
+    }
+
+    /**
+     * Installs or replaces a database trigger to emit real-time notifications for a specified table.
+     *
+     * @param string $_key_ The full identifier of the table in the format "schema.table".
+     * @return void
+     * @throws GC2Exception If the table does not have a primary key or has a primary key with multiple columns.
+     */
+    public function installNotifyTrigger(string $_key_): void
+    {
+        $explodedKey = self::explodeTableName($_key_);
+        $con = $this->getConstrains($explodedKey['schema'], $explodedKey['table'], 'p')['data'];
+        if (count($con) == 0) {
+            throw new GC2Exception("Table must have a primary key for emitting real time events", 401);
+        }
+        if (count($con) > 1) {
+            throw new GC2Exception("Table has primary key with multiple columns", 401);
+        }
+        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"{$explodedKey['schema']}\".\"{$explodedKey['table']}\"";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+        $sql = "CREATE TRIGGER _gc2_notify_transaction_trigger AFTER INSERT OR UPDATE OR DELETE ON \"{$explodedKey['schema']}\".\"{$explodedKey['table']}\" FOR EACH ROW EXECUTE PROCEDURE _gc2_notify_transaction('{$con[0]['column_name']}', '{$explodedKey['schema']}','{$explodedKey['table']}')";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+    }
+
+    /**
+     * Removes a notification trigger from the specified table in a schema.
+     *
+     * @param string $_key_ The composite key in the format "schema.table" used to identify the schema and table.
+     * @return void
+     */
+    public function removeNotifyTrigger(string $_key_): void
+    {
+        $explodedKey = self::explodeTableName($_key_);
+        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"{$explodedKey['schema']}\".\"{$explodedKey['table']}\"";
+        $res = $this->prepare($sql);
+        $this->execute($res);
     }
 }

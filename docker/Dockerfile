@@ -16,11 +16,12 @@ ENV PHP_VERSION=${PHP_VERSION}
 RUN apt-get -y  update && apt-get -y install wget gnupg2 && rm -rf /var/lib/apt/lists/*
 
 # Add PHP8 repo
-RUN echo "deb https://packages.sury.org/php/ bookworm main" \
-    | tee /etc/apt/sources.list.d/sury-php.list \
-    && wget -qO - https://packages.sury.org/php/apt.gpg \
-    | apt-key add - \
-    && apt-get update && apt-get install -y \
+RUN set -eux; \
+    apt-get install -y --no-install-recommends wget gnupg; \
+    wget -qO /usr/share/keyrings/sury-php.gpg https://packages.sury.org/php/apt.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ bookworm main" > /etc/apt/sources.list.d/sury-php.list; \
+    apt-get update && \
+    apt-get install -y \
     cron vim g++ build-essential git unzip rng-tools \
     apache2-utils postgresql-client supervisor \
     apache2 apache2-dev \
@@ -33,7 +34,7 @@ RUN echo "deb https://packages.sury.org/php/ bookworm main" \
     apt-transport-https ca-certificates software-properties-common \
     libprotobuf-c-dev libprotobuf-dev libprotobuf-c1 libprotobuf32 \
     protobuf-compiler protobuf-c-compiler libtool python3-dev bison \
-    python3-setuptools jq libwxgtk3.2-dev libuv1-dev libpq-dev libxml2-dev libgif-dev\
+    python3-setuptools jq libwxgtk3.2-dev libuv1-dev libpq-dev libxml2-dev libgif-dev libxerces-c-dev\
     && rm -rf /var/lib/apt/lists/*
 
 ###############################################################################
@@ -159,7 +160,7 @@ FROM ecw5 AS gdal5
 
 ENV GDAL_VERSION=3.5.3
 
-RUN wget http://download.osgeo.org/gdal/${GDAL_VERSION}/gdal353.zip \
+RUN wget https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal353.zip \
  && unzip gdal353.zip \
  && cd gdal-${GDAL_VERSION} \
  && ./configure \
@@ -318,9 +319,11 @@ RUN mkdir -p /var/www \
 WORKDIR /var/www/geocloud2
 
 # Instal composer
-RUN cd app \
+RUN set -e; cd app \
+    && EXPECTED_SIGNATURE="$(php -r "echo file_get_contents('https://composer.github.io/installer.sig');")" \
     && php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
-    && php -r "if (hash_file('sha384', 'composer-setup.php') === 'dac665fdc30fdd8ec78b38b9800061b4150413ff2e3b6f88543c636f7cd84f6db9189d43a81e5503cda447da73c7e5b6') { echo 'Installer verified'.PHP_EOL; } else { echo 'Installer corrupt'.PHP_EOL; unlink('composer-setup.php'); exit(1); }" \
+    && ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")" \
+    && if [ "$EXPECTED_SIGNATURE" != "$ACTUAL_SIGNATURE" ]; then echo 'Installer corrupt' >&2; rm composer-setup.php; exit 1; fi \
     && php composer-setup.php \
     && php -r "unlink('composer-setup.php');"
 

@@ -65,8 +65,8 @@ class Layer extends Controller
     public function put_records(): array
     {
         $data = json_decode(urldecode(Input::get(null, true)), true);
-        if (!is_array($data["data"][0])) {
-            $data["data"] = [0 => $data["data"]];
+        if (!isset($data["data"]) || !is_array($data["data"][0] ?? null)) {
+            $data["data"] = [0 => $data["data"] ?? null];
         }
         foreach ($data["data"] as $datum) {
             $response = $this->auth($datum["_key_"]);
@@ -147,7 +147,7 @@ class Layer extends Controller
     {
         $response = $this->auth(null, array());
         $this->table->begin();
-        $res = !$response['success'] ? $response : $this->table->rename(urldecode(Input::getPath()->part(4)), json_decode(Input::get())->data);
+        $res = !$response['success'] ? $response : $this->table->rename(urldecode(Input::getPath()->part(4)), json_decode(Input::get(), true)['data']['name']);
         $this->table->commit();
         return $res;
     }

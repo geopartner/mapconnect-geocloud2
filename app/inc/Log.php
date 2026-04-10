@@ -22,8 +22,12 @@ class Log
     static function write(string $path, ?string $body = null): void
     {
         $logFile = fopen($path, "a");
+        if ($logFile === false) {
+            return;
+        }
         fwrite($logFile, Util::clientIp() . " - - [" . date('Y-m-d H:i:s') . "] ");
         fwrite($logFile, "\"" . $_SERVER['REQUEST_METHOD'] . " " . $_SERVER["REQUEST_URI"] . " " . $_SERVER['SERVER_PROTOCOL'] . "\" \"" . ($_SERVER['HTTP_USER_AGENT'] ?? null) . "\"\n");
         if (!empty($body)) fwrite($logFile,$body . "\n");
+        fclose($logFile);
     }
 }

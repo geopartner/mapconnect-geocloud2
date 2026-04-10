@@ -215,6 +215,71 @@ function which(): string
 }
 
 /**
+ * Build an ogr2ogr shell command with common flags and escapeshellarg.
+ *
+ * @param string $encoding PGCLIENTENCODING value
+ * @param string $srid EPSG code
+ * @param string $db Database name
+ * @param string $workingSchema Target schema
+ * @param string $randTableName Target table
+ * @param string $inputPath Source file/path (already escaped if needed)
+ * @param string $mode "-overwrite" or "-append"
+ * @param string $type Geometry type (or "AUTO" to omit -nlt)
+ * @param bool $preserveFid Whether to add -preserve_fid
+ * @param array $extraArgs Additional arguments (already escaped)
+ * @return string
+ */
+function buildOgr2ogrCmd(
+    string $encoding,
+    string $srid,
+    string $db,
+    string $workingSchema,
+    string $randTableName,
+    string $inputPath,
+    string $mode = '-overwrite',
+    string $type = 'AUTO',
+    bool   $preserveFid = false,
+    array  $extraArgs = [],
+): string
+{
+    $pgConn = "host=" . Connection::$param["postgishost"]
+        . " port=" . Connection::$param["postgisport"]
+        . " user=" . Connection::$param["postgisuser"]
+        . " password=" . Connection::$param["postgispw"]
+        . " dbname=" . $db;
+
+    $parts = [
+        "env PGCLIENTENCODING=" . escapeshellarg($encoding),
+        which(),
+        $mode,
+        "-dim 2",
+        "-lco " . escapeshellarg("GEOMETRY_NAME=the_geom"),
+        "-lco " . escapeshellarg("FID=gid"),
+        "-lco " . escapeshellarg("PRECISION=NO"),
+        "-a_srs " . escapeshellarg("EPSG:$srid"),
+        "-f " . escapeshellarg("PostgreSQL"),
+        "PG:" . escapeshellarg($pgConn),
+    ];
+
+    if ($preserveFid) {
+        $parts[] = "-preserve_fid";
+    }
+
+    foreach ($extraArgs as $arg) {
+        $parts[] = $arg;
+    }
+
+    $parts[] = $inputPath;
+    $parts[] = "-nln " . escapeshellarg("$workingSchema.$randTableName");
+
+    if ($type !== "AUTO") {
+        $parts[] = "-nlt " . escapeshellarg($type);
+    }
+
+    return implode(" ", $parts);
+}
+
+/**
  *
  */
 function getCmd(): void
@@ -254,20 +319,28 @@ function getCmd(): void
 
     print "\nInfo: Staring inserting in temp table using ogr2ogr...";
 
-    $cmd = "PGCLIENTENCODING={$encoding} " . which() . " " .
-        "-overwrite " .
-        "-dim 2 " .
-        "-oo 'DOWNLOAD_SCHEMA=" . ($downloadSchema && !$contentIsCsv ? "YES" : "NO") . "' " .
-        "-lco 'GEOMETRY_NAME=the_geom' " .
-        "-lco 'FID=gid' " .
-        "-lco 'PRECISION=NO' " .
-        "-a_srs 'EPSG:{$srid}' " .
-        "-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . " user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . $db . "' " .
-        ($isCsv ? "-oo X_POSSIBLE_NAMES=lon*,Lon*,x,X -oo Y_POSSIBLE_NAMES=lat*,Lat*,y,Y -oo AUTODETECT_TYPE=YES -oo GEOM_POSSIBLE_NAMES=geometri " : '') .
-        ($isCsv ? "'CSV:" : "'") .
-        $tmpFilePath . "' " .
-        "-nln " . $workingSchema . "." . $randTableName . " " .
-        ($type == "AUTO" ? "" : "-nlt {$type}");
+    $extraArgs = [
+        "-oo " . escapeshellarg("DOWNLOAD_SCHEMA=" . ($downloadSchema && !$contentIsCsv ? "YES" : "NO")),
+    ];
+    if ($isCsv) {
+        $extraArgs[] = "-oo " . escapeshellarg("X_POSSIBLE_NAMES=lon*,Lon*,x,X");
+        $extraArgs[] = "-oo " . escapeshellarg("Y_POSSIBLE_NAMES=lat*,Lat*,y,Y");
+        $extraArgs[] = "-oo " . escapeshellarg("AUTODETECT_TYPE=YES");
+        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri");
+    }
+
+    $source = $isCsv ? escapeshellarg("CSV:" . $tmpFilePath) : escapeshellarg($tmpFilePath);
+
+    $cmd = buildOgr2ogrCmd(
+        encoding: $encoding,
+        srid: $srid,
+        db: $db,
+        workingSchema: $workingSchema,
+        randTableName: $randTableName,
+        inputPath: $source,
+        type: $type,
+        extraArgs: $extraArgs,
+    );
     exec($cmd . ' 2>&1', $out, $err);
 }
 
@@ -283,7 +356,7 @@ function getCmdPaging(): void
     print "\nInfo: Start paged download...";
 
     $pass = true;
-    $sql = "SELECT gid,ST_XMIN(st_fishnet), ST_YMIN(st_fishnet), ST_XMAX(st_fishnet), ST_YMAX(st_fishnet) FROM {$grid} GROUP BY gid, st_xmin, st_ymin, st_xmax, st_ymax ORDER BY gid";
+    $sql = "SELECT gid,ST_XMIN(st_fishnet), ST_YMIN(st_fishnet), ST_XMAX(st_fishnet), ST_YMAX(st_fishnet) FROM $grid GROUP BY gid, st_xmin, st_ymin, st_xmax, st_ymax ORDER BY gid";
     $res = $table->execQuery($sql);
     $cellTemps = [];
 
@@ -302,19 +375,72 @@ function getCmdPaging(): void
             $pass = false;
         }
 
-        $cmd = "PGCLIENTENCODING={$encoding} " . which() . " " .
-            "-overwrite " .
-            "-preserve_fid " .
-            "-dim 2 " .
-            ($downloadSchema ? "-oo 'CONFIG_FILE=/var/www/geocloud2/app/scripts/gmlasconf.xml' " : " ") .
-            "-lco 'GEOMETRY_NAME=the_geom' " .
-            "-lco 'FID=gid' " .
-            "-lco 'PRECISION=NO' " .
-            "-a_srs 'EPSG:{$srid}' " .
-            "-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . " user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . $db . "' " .
-            ($downloadSchema ? "GMLAS:" . $tmpDir . $gmlName . " " : $tmpDir . $gmlName . " ") .
-            "-nln {$workingSchema}.{$cellTemp} " .
-            "-nlt {$type}";
+        $gmlPath = $tmpDir . $gmlName;
+
+        // SRS normalizer
+        $logNormalizeCount = true;
+
+        $perlExpr = $logNormalizeCount ? <<<'PERL'
+            BEGIN { $c = 0; }
+            $c += s{
+              (srsName=")
+              (?:
+                https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
+              | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
+              | urn:ogc:def:crs:EPSG::(\d+)
+              )
+              (")
+            }{
+              $1 . "EPSG:" . ($2 // $3 // $4) . $5
+            }gex;
+            END { print STDERR "SRS normalized: $c\n"; }
+            PERL
+            : <<<'PERL'
+            $c += s{
+              (srsName=")
+              (?:
+                https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
+              | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
+              | urn:ogc:def:crs:EPSG::(\d+)
+              )
+              (")
+            }{
+              $1 . "EPSG:" . ($2 // $3 // $4) . $5
+            }gex;
+            PERL;
+
+        // Normalize SRS in-place
+        $normalizeCmd = "perl -i -0777 -pe " . escapeshellarg($perlExpr) . " " . escapeshellarg($gmlPath);
+        exec($normalizeCmd . ' 2>&1');
+
+        // Build final cmd
+        if ($downloadSchema) {
+            $extraArgs = [
+                "-oo " . escapeshellarg("CONFIG_FILE=/var/www/geocloud2/app/scripts/gmlasconf.xml"),
+            ];
+            $cmd = buildOgr2ogrCmd(
+                encoding: $encoding,
+                srid: $srid,
+                db: $db,
+                workingSchema: $workingSchema,
+                randTableName: $cellTemp,
+                inputPath: "GMLAS:" . escapeshellarg($gmlPath),
+                type: $type,
+                preserveFid: true,
+                extraArgs: $extraArgs,
+            );
+        } else {
+            $cmd = buildOgr2ogrCmd(
+                encoding: $encoding,
+                srid: $srid,
+                db: $db,
+                workingSchema: $workingSchema,
+                randTableName: $cellTemp,
+                inputPath: escapeshellarg($gmlPath),
+                type: $type,
+                preserveFid: true,
+            );
+        }
 
         exec($cmd . ' 2>&1', $out, $err);
         if ($err) {
@@ -386,10 +512,11 @@ function getCmdPaging(): void
 
     print "\n";
     $cellNumber = 1;
+    print "\nProcessing cell ";
     while ($row = $table->fetchRow($res)) {
         global $count;
         $count = 1;
-        print "\n Processing cell #" . $cellNumber;
+        print $cellNumber . ' ';
         $cellNumber++;
         fetch($row, $url, $randTableName, $encoding, $downloadSchema, $workingSchema, $type, $db, $id);
     }
@@ -401,7 +528,7 @@ function getCmdPaging(): void
     $gotFields = false;
     foreach ($cellTemps as $t) {
         if (!$gotFields) {
-            foreach ($table->getMetaData("{$workingSchema}.{$t}", false, false, null, null, false, false) as $k => $v) {
+            foreach ($table->getMetaData("$workingSchema.$t", false, false, null, null, false, false) as $k => $v) {
                 if (
                     array_reverse(explode("_", $k))[0] != "nil" &&
                     $k != "description_href" &&
@@ -433,10 +560,10 @@ function getCmdPaging(): void
         cleanUp(1);
     }
 
-    $sql = "CREATE TABLE {$workingSchema}.{$randTableName} AS " . implode("\nUNION ALL\n", $selects);
+    $sql = "CREATE TABLE $workingSchema.$randTableName AS " . implode("\nUNION ALL\n", $selects);
     $res = $table->prepare($sql);
     try {
-        $res->execute();
+        $table->execute($res);
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
@@ -447,7 +574,7 @@ function getCmdPaging(): void
         foreach ($drops as $d) {
             $res = $table->prepare($d);
             try {
-                $res->execute();
+                $table->execute($res);
             } catch (PDOException $e) {
                 print "Warning: ";
                 print_r($e->getMessage());
@@ -457,26 +584,35 @@ function getCmdPaging(): void
 
     // If source has an "id" fields and identifier is gml:id, it will be mapped to id2 by GMLAS driver
     // We try to rename id2 to id and drop id1
-    $table->execQuery("SAVEPOINT rename_id2");
-    $sql = "ALTER TABLE {$workingSchema}.{$randTableName} RENAME id2 TO id";
-    $res = $table->prepare($sql);
-    try {
-        $res->execute();
-    } catch (PDOException $e) {
+    $tmpTableName = $workingSchema . ".". $randTableName;
+    if ($table->doesColumnExist($tmpTableName, 'id2')['exists']) {
+        $sql = "ALTER TABLE $tmpTableName RENAME id2 TO id";
+        $res = $table->prepare($sql);
+        try {
+            $table->execute($res);
+        } catch (PDOException $e) {
+            print "Error: ";
+            print_r($e->getMessage());
+            cleanUp();
+            exit(1);
+        }
+    } else {
         print "\nNotice: Could not rename id2 to id. Source may not has an 'id' field.";
-        $table->execQuery("ROLLBACK TO SAVEPOINT rename_id2");
     }
-
-    $table->execQuery("SAVEPOINT drop_id1");
-    $sql = "ALTER TABLE {$workingSchema}.{$randTableName} DROP id1";
-    $res = $table->prepare($sql);
-    try {
-        $res->execute();
-    } catch (PDOException $e) {
+    if ($table->doesColumnExist($tmpTableName, 'id1')['exists']) {
+        $sql = "ALTER TABLE $tmpTableName DROP id1";
+        $res = $table->prepare($sql);
+        try {
+            $table->execute($res);
+        } catch (PDOException $e) {
+            print "Error: ";
+            print_r($e->getMessage());
+            cleanUp();
+            exit(1);
+        }
+    } else {
         print "\nNotice: Could not drop id1. Source may not has an 'id' field.";
-        $table->execQuery("ROLLBACK TO SAVEPOINT drop_id1");
     }
-
 
     if (!$id) {
         $sql = "SELECT column_name FROM information_schema.columns WHERE table_schema='{$workingSchema}' AND table_name='{$randTableName}' and column_name='gml_id'";
@@ -738,17 +874,16 @@ function getCmdFile(): void
         }
     }
 
-    $cmd = "PGCLIENTENCODING={$encoding} " . which() . " " .
-        "-append " .
-        "-dim 2 " .
-        "-lco 'GEOMETRY_NAME=the_geom' " .
-        "-lco 'FID=gid' " .
-        "-lco 'PRECISION=NO' " .
-        "-a_srs 'EPSG:{$srid}' " .
-        "-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . " user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . $db . "' " .
-        $dir . "/" . $fileSetName . " " .
-        "-nln {$workingSchema}.{$randTableName} " .
-        "-nlt {$type}";
+    $cmd = buildOgr2ogrCmd(
+        encoding: $encoding,
+        srid: $srid,
+        db: $db,
+        workingSchema: $workingSchema,
+        randTableName: $randTableName,
+        inputPath: escapeshellarg($dir . "/" . $fileSetName),
+        mode: '-append',
+        type: $type,
+    );
     exec($cmd . ' 2>&1', $out, $err);
 
     array_map('unlink', glob($dir . "/" . $randFileName . ".*"));
@@ -836,19 +971,25 @@ function getCmdZip(): void
         $isCsv = true;
     }
 
-    $cmd = "PGCLIENTENCODING={$encoding} " . which() . " " .
-        "-overwrite " .
-        "-dim 2 " .
-        "-oo 'DOWNLOAD_SCHEMA=" . ($downloadSchema ? "YES" : "NO") . "' " .
-        "-lco 'GEOMETRY_NAME=the_geom' " .
-        "-lco 'FID=gid' " .
-        "-lco 'PRECISION=NO' " .
-        "-a_srs 'EPSG:{$srid}' " .
-        "-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . " user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . $db . "' " .
-        ($isCsv ? "-oo X_POSSIBLE_NAMES=lon*,Lon*,x,X -oo Y_POSSIBLE_NAMES=lat*,Lat*,y,Y -oo GEOM_POSSIBLE_NAMES=geometri " : '') .
-        "'" . $outFileName . "' " .
-        "-nln " . $workingSchema . "." . $randTableName . " " .
-        ($type == "AUTO" ? "" : "-nlt {$type}");
+    $extraArgs = [
+        "-oo " . escapeshellarg("DOWNLOAD_SCHEMA=" . ($downloadSchema ? "YES" : "NO")),
+    ];
+    if ($isCsv) {
+        $extraArgs[] = "-oo " . escapeshellarg("X_POSSIBLE_NAMES=lon*,Lon*,x,X");
+        $extraArgs[] = "-oo " . escapeshellarg("Y_POSSIBLE_NAMES=lat*,Lat*,y,Y");
+        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri");
+    }
+
+    $cmd = buildOgr2ogrCmd(
+        encoding: $encoding,
+        srid: $srid,
+        db: $db,
+        workingSchema: $workingSchema,
+        randTableName: $randTableName,
+        inputPath: escapeshellarg($outFileName),
+        type: $type,
+        extraArgs: $extraArgs,
+    );
     exec($cmd . ' 2>&1', $out, $err);
 }
 
@@ -1253,8 +1394,8 @@ function cleanUp(int $success = 0): void
     if ($success) {
         Database::setDb($db);
         $layer = new Layer();
-        $res = $layer->updateLastmodified($schema . "." . $safeName . ".the_geom");
-        print "\nInfo: " . $res["message"];
+        $layer->updateLastmodified(schema: $schema, table: $safeName);
+        print "\nInfo: Last modified value updated";
     }
 }
 

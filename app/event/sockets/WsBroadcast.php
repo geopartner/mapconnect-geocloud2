@@ -1,30 +1,42 @@
 <?php
+/**
+ * @author     Martin Høgh <mh@mapcentia.com>
+ * @copyright  2013-2025 MapCentia ApS
+ * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
+ *
+ */
 
 namespace app\event\sockets;
 
 use Amp\Http\Server\Request;
 use Amp\Http\Server\Response;
 use Amp\Parallel\Worker\Execution;
+use Amp\Parallel\Worker\WorkerPool;
 use Amp\Websocket\Server\WebsocketClientGateway;
 use Amp\Websocket\Server\WebsocketClientHandler;
 use Amp\Websocket\Server\WebsocketGateway;
 use Amp\Websocket\WebsocketClient;
 use Amp\Websocket\WebsocketClosedException;
 use app\event\tasks\AuthTask;
+use app\event\tasks\RunGraphQLTask;
 use app\event\tasks\RunQueryTask;
+use app\event\tasks\RunRpcTask;
 use app\event\tasks\ValidateTokenTask;
+use app\inc\Connection;
 use SplObjectStorage;
 use Throwable;
-use function Amp\Parallel\Worker\createWorker;
+use function Amp\Parallel\Worker\workerPool;
 
 
-readonly class WsBroadcast implements WebsocketClientHandler
+class WsBroadcast implements WebsocketClientHandler
 {
     private SplObjectStorage $clientProperties;
+    public WorkerPool $workerPool;
 
     public function __construct(public WebsocketGateway $gateway = new WebsocketClientGateway())
     {
         $this->clientProperties = new SplObjectStorage();
+        $this->workerPool = workerPool();
     }
 
     /**
@@ -35,44 +47,45 @@ readonly class WsBroadcast implements WebsocketClientHandler
         $query = $request->getUri()->getQuery();
         parse_str($query, $params);
         $errorMsg = null;
+
         if (isset($params['token'])) {
             $token = $params['token'];
+
             try {
-                $worker = createWorker();
+                // Validate token and parsed data
                 $task = new ValidateTokenTask($token);
-                $parsed = $worker->submit($task)->await()['data'];
+                $parsed = $this->workerPool->getWorker()->submit($task)->await()['data'];
+                // Connection to the database
+                $connection = new Connection(database: $parsed["database"]);
                 if (!$parsed['superUser']) {
-                    if (!isset($params['rel'])) {
-                        $errorMsg = [
-                            'type' => 'error',
-                            'error' => 'missing_rel',
-                            'message' => 'Sub-users must specify a rel parameter',
-                        ];
-                        goto end;
+                    foreach (explode(',', $params['rel']) as $rel) {
+                        $task = new AuthTask($parsed, $rel, $connection);
+                        if (!$this->workerPool->getWorker()->submit($task)->await()) {
+                            $errorMsg = [
+                                'type' => 'error',
+                                'error' => 'not_allowed',
+                                'message' => "Not allowed to access this resource: $rel",
+                            ];
+                            goto end;
+                        }
                     }
-                    $task = new AuthTask($parsed, $params['rel']);
-                    if (!$worker->submit($task)->await()) {
-                        $errorMsg = [
-                            'type' => 'error',
-                            'error' => 'not_allowed',
-                            'message' => "Not allowed to access this resource: {$params['rel']}",
-                        ];
-                        goto end;
-                    }
+
                 }
                 $this->gateway->addClient($client);
                 $db = $parsed['database'];
-                $this->clientProperties->attach($client, [
+                $this->clientProperties->offsetSet($client, [
                     'joinedAt' => time(),
                     'db' => $parsed['database'],
                     'user' => $parsed['uid'],
+                    'superUser' => $parsed['superUser'],
+                    'userGroup' => $parsed['userGroup'] ?? null,
+                    'rels' => !empty($params['rel']) ? explode(',', $params['rel']) : null,
                 ]);
                 echo "[INFO] Client {$client->getId()} connected on $db\n";;
-            } catch (Throwable) {
+            } catch (Throwable $e) {
                 $errorMsg = [
                     'type' => 'error',
                     'error' => 'invalid_token',
-                    'message' => 'JWT token is invalid or expired',
                 ];
             }
         } else {
@@ -95,13 +108,52 @@ readonly class WsBroadcast implements WebsocketClientHandler
             try {
                 $payload = $message->buffer();
                 $props = $this->clientProperties[$client];
-                echo "[INFO] message '$payload' from {$client->getId()} on {$props['db']}\n";
-                $r = $this->sql($payload, $props['db']);
-                $this->sendToClient($client, json_encode($r->await()));
+                echo "[INFO] message payload from {$client->getId()} on {$props['db']}\n";
+                $parsed = json_decode($payload, true);
+                if (!$parsed) {
+                    $errorMsg = [
+                        'type' => 'error',
+                        'error' => 'INVALID_JSON',
+                        'message' => "Invalid JSON payload: $payload",
+                    ];
+                    $this->sendToClient($client, json_encode($errorMsg));
+                    throw new \Exception("Invalid JSON payload: $payload");
+                }
+                // Handle the message. Check the type and call the appropriate method.
+                if (!array_is_list($parsed)) {
+                    $parsed = [$parsed];
+                }
+                $r = null;
+                if (isset($parsed[0]['q'])) {
+                    $r = $this->sql($parsed, $props);
+                }
+                if (isset($parsed[0]['jsonrpc'])) {
+                    $r = $this->rpc($parsed, $props);
+                }
+
+                if (isset($parsed[0]['test'])) {
+                    $r = $this->gql($parsed, $props);
+                }
+
+                if (isset($parsed[0]['rel'])) {
+                    $data = $this->clientProperties[$client];
+                    $data['rels'] = [$parsed[0]['rel']];
+                    $this->clientProperties[$client] = $data;
+                }
+                if ($r) {
+                    $result = array_values(array_filter($r->await()));
+                    if (count($result) == 1) {
+                        $result = $result[0];
+                    }
+                    if (!empty($result)) {
+                        $this->sendToClient($client, json_encode($result));
+                    }
+                }
             } catch (Throwable $e) {
                 echo "[ERROR] " . $e->getMessage() . "\n";
             }
         }
+        $this->clientProperties->detach($client);
     }
 
     public function sendToAll(string $text): void
@@ -116,18 +168,33 @@ readonly class WsBroadcast implements WebsocketClientHandler
     public function sendToClient(WebsocketClient $client, string $text): void
     {
         $client->sendText($text);
-
     }
 
-    private function sql(string $sql, string $db): Execution
+    private function sql(array $query, ?array $props): Execution
     {
-        $task = new RunQueryTask($sql, $db);
-        $worker = createWorker();
-        return $worker->submit($task);
+        $task = new RunQueryTask($query, $props);
+        return $this->workerPool->getWorker()->submit($task);
+    }
+
+    private function rpc(array $query, ?array $props): Execution
+    {
+        $task = new RunRpcTask($query, $props);
+        return $this->workerPool->getWorker()->submit($task);
+    }
+
+    private function gql(array $query, string $schema, ?array $props): Execution
+    {
+        $task = new RunGraphQLTask($query, $schema, $props);
+        return $this->workerPool->getWorker()->submit($task);
     }
 
     public function getProperties(WebsocketClient $client): array
     {
         return $this->clientProperties[$client];
+    }
+
+    public function setProperties(WebsocketClient $client, array $props): void
+    {
+        $this->clientProperties[$client] = $props;
     }
 }

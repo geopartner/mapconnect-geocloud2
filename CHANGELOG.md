@@ -5,19 +5,137 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
-## [Additions]
-
-### Added
-- WFS now supports GeoJSON as output format.
+## [2026.3.11] - 2026-30-3
+### Changed
+- Throw an exception for unauthorized database access in Meta v1 API. 
+  If a user is not authorized to access the database, an exception with code 401 and the message "USER_NOT_AUTHORIZED" is thrown.
+  Anonymous access is still possible. 
 
 ### Fixed
-- Fixed and issue with `api/v2/sql`. When a request was made with `format` or the likes, an metadata-object was appended to the end of said format, rendering it unreadable. most notibly excel. The object is now only available in the following formats: `json`, `geojson` (which is the default) and `jsonp`.
-- Fixed an issue where WFS would fail when the layer was clustered. Requires new mapfile generation.
-- Fixed an issue with precision on WFS when using 4326.
-- Fixed an issue in the metadata, where `false` values were translated to `null`
+- Fix `ClaimAcl` rule prioritization to ensure specific table matches override wildcard matches for both read and write permissions.
+- Stop the session on error handling in OAuth2 authentication flow.
 
+## [2026.3.10] - 2026-23-3
+### Fixed
+- Add JSON encoding for `properties` in session data initialization by token.
 
-## [2025.9.0] - 2025-16-9
+## [2026.3.9] - 2026-23-3
+### Fixed
+- Handle empty legend class values by setting properties (`img`, `name`, `expression`) to null to avoid errors.
+- Inner boundary handling in WFS-T to correctly process polygons with multiple rings.
+
+## [2026.3.8] - 2026-18-3
+### Changed
+- Feature API does not anymore url decode properties, and the Editor in Vidi does not url encode properties anymore.
+  Transport is changed to application/json from application/x-www-form-urlencoded, so both Vidi and GC2 must be upgraded to the latest version.
+
+## [2026.3.6] - 2026-16-3
+### Changed
+- Update default UUID generation to use the Postgres builtin `gen_random_uuid()` instead of `uuid_generate_v4()` from the uuid-ossp extension. Run migrations to update existing UUID columns to use the new default.
+
+## [2026.3.5] - 2026-13-3
+### Fixed
+- v2 API SQL with file output format failed because app/models/Sql.php didn't exit any longer, resulting in output after flushing the file.
+  Exit is moved to app/api/v2/Sql.php. This is not an issue in v4 APIs, which are not allowed to exit due to the need for running in worker mode.
+
+## [2026.3.4] - 2026-13-3
+### Fixed
+- Fix sub-user privilege check in Layer::getAll by correctly handling `jwt['superUser']` fallback logic.
+
+## [2026.3.3] - 2026-11-3
+### Changed
+- SqlNoToken class added for more robust handling of SQL API calls without a token.
+- `wms_allow_getmap_without_styles` added to MapFiles, so url parameter STYLES in WMS getMap request is not required.
+- `%2B` is replaced with `+` in requests bodies. This is a hack to ensure encoded JSON payloads.
+
+## [2026.3.2] - 2026-10-3
+### Fixed
+- Change from the static Connection object to the injected one to avoid issues ogr download.
+
+## [2026.3.1] - 2026-10-3
+### Changed
+- New tag
+
+## [2026.3.0] - 2026-9-3
+### Added
+- Limited Graphql support. api/graphql
+- Realtime
+
+### Changed
+- OAuth code-flow login.
+- API v4 is ready for use.
+
+### Fixed
+- Scheduler: Url-based SRS in GML is normalized, so they don't throw errors when using ogr GMLAS driver.
+
+## [2026.2.1] - 2026-23-2
+## Added
+- Graphql support
+- Real time
+
+## [2026.2.0] - 2026-5-2
+### Fixed
+- JSON is no longer URL decoded by default because it can invalidate the raw JSON with control characters.
+
+## [2026.1.2] - 2026-23-1
+### Fixed
+- Handle `PDOException` gracefully in `Mapfile.php` to prevent unhandled errors.
+
+## [2026.1.1] - 2026-21-1
+### Fixed
+- WFS did not get the access-control-allow-origin header set and therefore browsere blocked CORS requests.
+
+## [2026.1.0] - 2026-6-1
+### Fixed
+- Refactor `Sql.php`: split `DefaultTypeConverterFactory` instantiation and `setConnection` call so it works after upgrading sad_spirit\pg_wrapper
+
+## [2025.12.1] - 2025-19-12
+### Added
+- Added Cron expression validation to Scheduler for improved job scheduling reliability.
+
+## [2025.12.0] - 2025-9-12
+### Changed
+- The `Allow null` setting can now be set on columns in VIEWs and FTs. The settings are stored on the application level 
+  and are read by Vidi Editor, so fields on VIEWs and FTs can be required.
+- Table references can now have an `_order` property, which is used to sort the columns in the referenced table:
+```json
+{"_rel":"[schema.table]", "_value":"[field]", "_text":"[field]", "_where": "[foo <> bar]", "_order": "[field ASC]"}
+```
+
+## [2025.10.5] - 2025-31-10
+### Added
+- GeoJSON as output format to WFS 2.0. Use `&format=geojson` or `&format=application/json` in the URL.`
+
+## [2025.10.4] - 2025-23-10
+### Fixed
+- Add missing import for `DefaultTypeConverterFactory` in `app/models/Sql.php`.
+- Update composer dependencies: upgrade `sad_spirit/pg_builder` to `^3.2` and `sad_spirit/pg_wrapper` to `^3.3`.
+
+## [2025.10.3] - 2025-22-10
+### Fixed
+- Improved `Route.php` to handle empty responses gracefully and remove unused memory usage calculation in `Sql.php`. This fixes JSON artifacts in the non-JSON output formats.
+
+## [2025.10.2] - 2025-21-10
+### Added
+- Added `convertDataUrlsToHttp` to `App.php` to convert data urls to http urls in SQL API. If set to true, bytea fields will be converted to http urls in SQL API in the form: 
+`/api/v1/decodeimg/[database]/[relation]/[primary-field]/[id]`. Some caveats:
+  - Relation is inferred from the SQL string and the first found relation is used for [relation]
+  - To infer the mimetype, the first bytes from the bytea field are extracted with `substring`, 
+    which still has a big IO impact on TOASTed tables.
+  - The `convertDataUrlsToHttp` option is set to false by default.
+
+## [2025.10.1] - 2025-14-10
+### Skipped
+- No code changes.
+
+## [2025.10.0] - 2025-14-10
+### Security
+- Enhance filter handling in `Wms.php` and `TableWalkerRule.php` to use parentheses for getting operator precedence right.
+
+### Fixed
+- Relation names used in Redis keys are now base64 encoded. This fixes a bug where relations with special characters could not be used.
+
+## [2025.9.1] - 2025-16-9
 ### Fixed
 - Rename `redirect_url` to `redirect_uri` in Signup/Signout API for consistency.
 
@@ -31,7 +149,7 @@ and this project adheres to [CalVer](https://calver.org/).
 - `method` API for management of JSON-RPC methods, which can wraps SQL statement with optional instructions on how to interpret and format the data types.
 - `call` API for executing JSON-RPC methods.
 
-### CHANGED
+### Changed
 - Docker images updated to PHP 8.4 (from 8.3). PHP version is now an argument in the Dockerfile. **All locked Composer packages can run on PHP 8.4. This is not the case for earlier versions of the code base. If using an earlier version, then you must build your Docker image with PHP 8.3**
 - Throughout the code base, implicit marking parameters as null are changed to explicit (implicit is deprecated in PHP 8.4)
 - All Symfony validators are updated, so no deprecated notices are thrown.

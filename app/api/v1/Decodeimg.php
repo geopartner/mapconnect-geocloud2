@@ -9,9 +9,12 @@
 
 namespace app\api\v1;
 
+use app\exceptions\GC2Exception;
 use app\inc\Controller;
 use app\inc\Input;
+use app\inc\Util;
 use app\models\Table;
+use Error;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 
 /**
@@ -29,6 +32,7 @@ class Decodeimg extends Controller
     /**
      * Decodeimg constructor.
      * @throws PhpfastcacheInvalidArgumentException
+     * @throws GC2Exception
      */
     function __construct()
     {
@@ -38,13 +42,31 @@ class Decodeimg extends Controller
 
     /**
      *
+     * @throws GC2Exception
      */
     public function get_index(): never
     {
-        header("Content-type: image/jpeg");
-        $data = $this->table->getRecordByPri(Input::getPath()->part(7));
-        $data = explode(",", $data["data"][Input::getPath()->part(6)])[1];
-        echo base64_decode($data);
+        $record = $this->table->getRecordByPri(Input::getPath()->part(7))["data"];
+        $dataUri = $record[Input::getPath()->part(6)];
+        $index = Input::getPath()->part(8); // if array
+        if ( $index !== null) {
+            $dataUri = json_decode($dataUri);
+            $dataUri = $dataUri[$index] ?? null;
+        }
+        if (!$dataUri) {
+            header("HTTP/1.0 404 " . Util::httpCodeText("404"));
+            exit();
+        }
+        // Extract and set content type
+        if (preg_match('/^data:(.*?);/', $dataUri, $matches)) {
+            header("Content-type: " . $matches[1]);
+        }
+        // PHP can read data URIs directly
+        try {
+            readfile($dataUri);
+        } catch (Error $e) {
+            throw new GC2Exception($e->getMessage(), 404, null, "VALUE_PARSE_ERROR");
+        }
         exit();
     }
 }

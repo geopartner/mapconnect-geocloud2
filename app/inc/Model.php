@@ -11,7 +11,6 @@ declare(strict_types=1);
 namespace app\inc;
 
 use app\conf\App;
-use app\conf\Connection;
 use app\exceptions\GC2Exception;
 use app\models\Cost;
 use app\models\Database;
@@ -21,6 +20,7 @@ use Exception;
 use PDO;
 use PDOException;
 use PDOStatement;
+use PgSql\Result;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use TypeError;
 
@@ -31,42 +31,72 @@ use TypeError;
  */
 class Model
 {
+    public static array $PdoConnections = [];
+    public null|\PgSql\Connection $PgConnection = null;
     public string $postgishost;
     public string $postgisport;
     public string $postgisuser;
-    public string $postgisdb;
     public string $postgispw;
+    public string $postgisdb;
     public ?string $postgisschema;
-    public null|PDO|\PgSql\Connection $db = null;
-    public bool $connectionFailed;
     public ?string $theGeometry;
 
-    // If Connection::$params are not set, then set them from environment variables
-    function __construct()
+    function __construct(public ?Connection $connection = null)
     {
-        $this->connectionFailed = false;
-
-        // If Connection::$params are not set, when set them from environment variables
-        Connection::$param['postgishost'] = Connection::$param['postgishost'] ?? getenv('POSTGIS_HOST');
-        Connection::$param['postgisport'] = Connection::$param['postgisport'] ?? getenv('POSTGIS_PORT');
-        Connection::$param['postgisuser'] = Connection::$param['postgisuser'] ?? getenv('POSTGIS_USER');
-        Connection::$param['postgisdb'] = Connection::$param['postgisdb'] ?? getenv('POSTGIS_DB');
-        Connection::$param['postgispw'] = Connection::$param['postgispw'] ?? getenv('POSTGIS_PW');
-        Connection::$param['pgbouncer'] = Connection::$param['pgbouncer'] ?? getenv('POSTGIS_PGBOUNCER') === "true";
-
-        $this->postgishost = Connection::$param['postgishost'];
-        $this->postgisport = Connection::$param['postgisport'];
-        $this->postgisuser = Connection::$param['postgisuser'];
-        $this->postgisdb = Connection::$param['postgisdb'];
-        $this->postgispw = Connection::$param['postgispw'];
-        $this->postgisschema = Connection::$param['postgisschema'] ?? null;
+        if ($this->connection == null) {
+            $this->connection = new Connection();
+        }
+        $this->postgishost = $this->connection->host;
+        $this->postgisport = $this->connection->port;
+        $this->postgisuser = $this->connection->user;
+        $this->postgisdb = $this->connection->database;
+        $this->postgispw = $this->connection->password;
+        $this->postgisschema = $this->connection->schema;
     }
 
     /**
-     * @param PDOStatement $result
-     * @param string $result_type
-     * @return array|null
-     * @throws PDOException
+     * Retrieves the PDO connection for the current database.
+     *
+     * @return PDO|null The PDO connection if it exists, or null if no connection is available for the current database.
+     */
+    public function getPdoConnection(): ?PDO
+    {
+        $str = $this->connectString();
+        if (empty(self::$PdoConnections[$str])) {
+            return null;
+        }
+        return self::$PdoConnections[$str];
+    }
+
+    /**
+     * Sets the PDO connection for the current database.
+     *
+     * @param PDO $conn The PDO connection instance to associate with the current database.
+     *
+     * @return void
+     */
+    public function setPdoConnection(PDO $conn): void
+    {
+        self::$PdoConnections[$this->connectString()] = $conn;
+    }
+
+    /**
+     * Unsets the PDO connection for the current database.
+     *
+     * @return void
+     */
+    public function unsetPdoConnection(): void
+    {
+        unset(self::$PdoConnections[$this->connectString()]);
+    }
+
+    /**
+     * Fetches a single row from the given PDO statement result based on the specified result type.
+     *
+     * @param PDOStatement $result The PDOStatement object containing the result set to fetch from.
+     * @param string $result_type The type of result to fetch. Supported values are 'assoc' (fetch an associative array) and 'both' (both associative and numeric keys). Default is 'assoc'.
+     *
+     * @return array|null The fetched row as an associative or both associative and numeric array, or null if no row is available.
      */
     public function fetchRow(PDOStatement $result, string $result_type = "assoc"): ?array
     {
@@ -82,10 +112,13 @@ class Model
     }
 
     /**
-     * @param PDOStatement $result
-     * @param string $result_type
-     * @return array
-     * @throws PDOException
+     * Fetches all rows from a PDO statement into an array.
+     *
+     * @param PDOStatement $result The PDOStatement object containing the executed query results.
+     * @param string $result_type The fetch style for the results. Supported values are "assoc" for associative arrays,
+     * and "both" for both associative and indexed arrays. Defaults to "both".
+     *
+     * @return array The resulting array of rows fetched according to the specified fetch style.
      */
     public function fetchAll(PDOStatement $result, string $result_type = "both"): array
     {
@@ -129,8 +162,8 @@ class Model
     public function getPrimeryKey(string $table): ?array
     {
         $cacheType = "prikey";
-        $cacheRel = $table;
-        $cacheId = $this->postgisdb . "_" . $cacheRel . "_" . $cacheType;
+        $cacheRel = md5($table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
         if (!empty(App::$param["defaultPrimaryKey"])) {
             return ["attname" => App::$param["defaultPrimaryKey"]];
         }
@@ -150,7 +183,6 @@ class Model
                 return null;
             }
             $CachedString->set($response)->expiresAfter(Globals::$cacheTtl);
-            // $CachedString->addTags([$cacheType, $cacheRel, $this->postgisdb]);
             Cache::save($CachedString);
             return $response;
         }
@@ -179,8 +211,9 @@ class Model
      */
     public function begin(): void
     {
-        if (!$this->db->inTransaction()) {
-            $this->db->beginTransaction();
+        $this->connect();
+        if (!$this->getPdoConnection()->inTransaction()) {
+            $this->getPdoConnection()->beginTransaction();
         }
     }
 
@@ -194,12 +227,12 @@ class Model
      * @throws PDOException If the statement execution fails, the exception is thrown and the transaction (if active) is rolled back.
      *
      */
-    public function execute(PDOStatement $statement, array $params = []): true
+    public function execute(PDOStatement $statement, array $params = [], bool $autoRollback = true): true
     {
         try {
-            $statement->execute($params);
+            $statement->execute(empty($params) ? null : $params);
         } catch (PDOException $e) {
-            if ($this->db->inTransaction()) {
+            if ($autoRollback) {
                 $this->rollback();
             }
             throw $e;
@@ -214,7 +247,9 @@ class Model
      */
     public function commit(): void
     {
-        $this->db->commit();
+        if ($this->getPdoConnection()->inTransaction()) {
+            $this->getPdoConnection()->commit();
+        }
     }
 
     /**
@@ -224,7 +259,9 @@ class Model
      */
     public function rollback(): void
     {
-        $this->db->rollback();
+        if ($this->getPdoConnection()->inTransaction()) {
+            $this->getPdoConnection()->rollBack();
+        }
     }
 
     /**
@@ -237,16 +274,12 @@ class Model
      */
     public function prepare(string $sql): PDOStatement
     {
-        if (!$this->db) {
-            $this->connect();
-        }
-        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->connect();
+        $this->getPdoConnection()->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         try {
-            return $this->db->prepare($sql);
+            return $this->getPdoConnection()->prepare($sql);
         } catch (PDOException $e) {
-            if ($this->db->inTransaction()) {
-                $this->rollback();
-            }
+            $this->rollback();
             throw $e;
         }
     }
@@ -258,47 +291,37 @@ class Model
      * @param string $conn The database connection type to use. Defaults to "PDO". Supported values are "PDO" and "PG".
      * @param string $queryType The type of SQL query to be executed. Defaults to "select". Supported values are "select" and "transaction".
      *
-     * @return mixed The result of the query execution. Returns a PDOStatement object for "select" queries using "PDO", an integer for "transaction" queries using "PDO", or the result resource for "PG". Returns null if no result is available.
+     * @return PDOStatement|int|Result|null The result of the query execution. Returns a PDOStatement object for "select" queries using "PDO", an integer for "transaction" queries using "PDO", or the result resource for "PG". Returns null if no result is available.
      *
      * @throws PDOException If a PDO query execution fails during a "transaction" type and the exception handling process is triggered.
      */
-    public function execQuery(string $query, string $conn = "PDO", string $queryType = "select"): mixed
+    public function execQuery(string $query, string $conn = "PDO", string $queryType = "select"): PDOStatement|int|null|Result
     {
         $result = null;
         switch ($conn) {
             case "PG" :
-                if (!$this->db) {
-                    $this->connect("PG");
+                $this->connect("PG");
+                $result = pg_query($this->PgConnection, $query);
+                if (!$result) {
+                    throw new PDOException(pg_last_error($this->PgConnection));
                 }
-                $result = pg_query($this->db, $query);
                 break;
             case "PDO" :
-                if (!$this->db) {
-                    $this->connect();
-                }
-                if ($this->connectionFailed) {
-                    $result = false;
-                }
-                $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                switch ($queryType) {
-                    case "select" :
-                        // Return PDOStatement object
-                        $result = $this->db->query($query);
-                        break;
-                    case "transaction" :
-                        // Return integer
-                        try {
-                            $result = $this->db->exec($query);
-                        } catch (PDOException $e) {
-                            if ($this->db->inTransaction()) {
-                                $this->db->rollBack();
-                            }
-                            throw $e;
-                        } finally {
-                            if ($this->db->inTransaction()) {
-                                $this->db->rollBack();
-                            }
-                        }
+                $this->connect();
+                try {
+                    $this->getPdoConnection()->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+                    switch ($queryType) {
+                        case "select" :
+                            // Return PDOStatement object
+                            $result = $this->getPdoConnection()->query($query);
+                            break;
+                        case "transaction" :
+                            // Return integer
+                            $result = $this->getPdoConnection()->exec($query);
+                    }
+                } catch (PDOException $e) {
+                    $this->rollBack();
+                    throw $e;
                 }
                 break;
         }
@@ -350,8 +373,8 @@ class Model
     public function getMetaData(string $table, bool $temp = false, bool $restriction = true, ?array $restrictions = null, ?string $cacheKey = null, bool $getEnums = true, bool $lookupForeignTables = true): array
     {
         $cacheType = "metadata";
-        $cacheRel = $cacheKey ?: $table;
-        $cacheId = $this->postgisdb . "_" . $cacheRel . "_" . $cacheType . "_" . ($temp ? 'temp' : 'notTemp') . "_" . ($restriction ? 'restriction' : 'notRestriction') . "_" . ($getEnums ? 'enums' : 'notEnums') . "_" . ($restrictions ? 'restrictions_' . md5(serialize($restrictions)) : 'noRestrictions');
+        $cacheRel = md5($cacheKey ?: $table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType . "_" . ($temp ? 'temp' : 'notTemp') . "_" . ($restriction ? 'restriction' : 'notRestriction') . "_" . ($getEnums ? 'enums' : 'notEnums') . "_" . ($restrictions ? 'restrictions_' . md5(serialize($restrictions)) : 'noRestrictions');
         $CachedString = Cache::getItem($cacheId);
 
         if ($CachedString != null && $CachedString->isHit()) {
@@ -376,58 +399,71 @@ class Model
             $foreignConstrains = $this->getForeignConstrains($_schema, $_table)["data"];
             $checkConstrains = $this->getConstrains($_schema, $_table, 'c')["data"];
             $sql = "SELECT
-                  attname                          AS column_name,
-                  attnum                           AS ordinal_position,
-                  atttypid :: REGTYPE              AS udt_name,
-                  typname,
-                  attnotnull                       AS is_nullable,
-                  format_type(atttypid, atttypmod) AS full_type,
-                  pg_get_expr(d.adbin, d.adrelid) AS default_value,
-                  CASE  
-                      when atttypid in (1043) then
-                  atttypmod-4         
-       ELSE null       end       AS character_maximum_length 
-       ,
-                  CASE atttypid
-                     WHEN 21 /*int2*/ THEN 16
-                     WHEN 23 /*int4*/ THEN 32
-                     WHEN 20 /*int8*/ THEN 64
-                     WHEN 1700 /*numeric*/ THEN
-                          CASE WHEN atttypmod = -1
-                               THEN null
-                               ELSE ((atttypmod - 4) >> 16) & 65535     -- calculate the precision
-                               END
-                     WHEN 700 /*float4*/ THEN 24 /*FLT_MANT_DIG*/
-                     WHEN 701 /*float8*/ THEN 53 /*DBL_MANT_DIG*/
-                     ELSE null
-              END   AS numeric_precision,
-              CASE 
-                WHEN atttypid IN (21, 23, 20) THEN 0
-                WHEN atttypid IN (1700) THEN            
-                    CASE 
-                        WHEN atttypmod = -1 THEN null       
-                        ELSE (atttypmod - 4) & 65535            -- calculate the scale  
-                    END
-                   ELSE null
-              END AS numeric_scale
-       ,
-        case 
-          when attlen <> -1 then attlen
-          when atttypid in (1043, 25) then information_schema._pg_char_octet_length(information_schema._pg_truetypid(a.*, t.*), information_schema._pg_truetypmod(a.*, t.*))
-       end as max_bytes
-                  
-                FROM pg_attribute a
-                  join pg_type t on atttypid = t.oid
-                  left join pg_catalog.pg_attrdef d ON (a.attrelid, a.attnum) = (d.adrelid, d.adnum)
-
-                WHERE attrelid = :table :: REGCLASS
-                        AND attnum > 0
-                        AND NOT attisdropped";
+                        attname                          AS column_name,
+                        attnum                           AS ordinal_position,
+                        atttypid :: REGTYPE              AS udt_name,
+                        typname,
+                        attnotnull                       AS is_nullable,
+                        format_type(atttypid, atttypmod) AS full_type,
+                        pg_get_expr(d.adbin, d.adrelid)  AS default_value,
+                    
+                        a.attidentity                    AS attidentity,
+                        CASE a.attidentity
+                            WHEN 'a' THEN true
+                            WHEN 'd' THEN true
+                            ELSE false
+                            END                              AS is_identity,
+                        CASE a.attidentity
+                            WHEN 'a' THEN 'always'
+                            WHEN 'd' THEN 'by default'
+                            ELSE NULL
+                            END                              AS identity_generation,
+                    
+                        CASE
+                            when atttypid in (1043) then
+                                atttypmod-4
+                            ELSE null       end       AS character_maximum_length
+                            ,
+                        CASE atttypid
+                            WHEN 21 /*int2*/ THEN 16
+                            WHEN 23 /*int4*/ THEN 32
+                            WHEN 20 /*int8*/ THEN 64
+                            WHEN 1700 /*numeric*/ THEN
+                                CASE WHEN atttypmod = -1
+                                         THEN null
+                                     ELSE ((atttypmod - 4) >> 16) & 65535     -- calculate the precision
+                                    END
+                            WHEN 700 /*float4*/ THEN 24 /*FLT_MANT_DIG*/
+                            WHEN 701 /*float8*/ THEN 53 /*DBL_MANT_DIG*/
+                            ELSE null
+                            END   AS numeric_precision,
+                        CASE
+                            WHEN atttypid IN (21, 23, 20) THEN 0
+                            WHEN atttypid IN (1700) THEN
+                                CASE
+                                    WHEN atttypmod = -1 THEN null
+                                    ELSE (atttypmod - 4) & 65535            -- calculate the scale
+                                    END
+                            ELSE null
+                            END AS numeric_scale
+                            ,
+                        case
+                            when attlen <> -1 then attlen
+                            when atttypid in (1043, 25) then information_schema._pg_char_octet_length(information_schema._pg_truetypid(a.*, t.*), information_schema._pg_truetypmod(a.*, t.*))
+                            end as max_bytes
+                    
+                    FROM pg_attribute a
+                             join pg_type t on atttypid = t.oid
+                             left join pg_catalog.pg_attrdef d ON (a.attrelid, a.attnum) = (d.adrelid, d.adnum)
+                    
+                    WHERE attrelid = :table :: REGCLASS
+                      AND attnum > 0
+                      AND NOT attisdropped";
             $res = $this->prepare($sql);
             if ($temp) {
-                $res->execute(array("table" => "\"" . $table . "\""));
+                $this->execute($res, array("table" => "\"" . $table . "\""));
             } else {
-                $res->execute(array("table" => "\"" . $_schema . "\".\"" . $_table . "\""));
+                $this->execute($res, array("table" => "\"" . $_schema . "\".\"" . $_table . "\""));
             }
             $index = $this->getIndexes($_schema, $_table);
             $comments = $this->getColumnComments($_schema, $_table);
@@ -458,10 +494,18 @@ class Model
                         if (!empty($rel->_where)) {
                             $sql .= " WHERE $rel->_where";
                         }
-                        $resC = $this->prepare($sql);
-                        $resC->execute();
-                        while ($rowC = $this->fetchRow($resC)) {
-                            $foreignValues[] = ["value" => $rowC["value"], "alias" => (string)$rowC["text"]];
+                        if (!empty($rel->_order)) {
+                            $sql .= " ORDER BY $rel->_order";
+                        }
+                        // We ignore the error here
+                        try {
+                            $resC = $this->prepare($sql);
+                            $resC->execute();
+                            while ($rowC = $this->fetchRow($resC)) {
+                                $foreignValues[] = ["value" => $rowC["value"], "alias" => (string)$rowC["text"]];
+                            }
+                        } catch (Exception $e) {
+                            error_log($e->getMessage());
                         }
                     }
                 } elseif ($restriction && $restrictions && isset($restrictions[$row["column_name"]]) && $restrictions[$row["column_name"]] != "*" && $getEnums) {
@@ -514,6 +558,7 @@ class Model
                         $tmpArr["is_primary"] = !empty($index["is_primary"][$row["column_name"]]);
                         $tmpArr["is_nullable"] = !$row['is_nullable'];
                         $tmpArr["default_value"] = $row['default_value'];
+                        $tmpArr["identity_generation"] = $row['identity_generation'];
                         $tmpArr["index_method"] = !empty($index["index_method"][$row["column_name"]]) ? $index["index_method"][$row["column_name"]] : null;
                         $tmpArr["checks"] = sizeof($checkValues) > 0 ? array_map(function ($con) {
                             preg_match('#\((.*?)\)#', $con, $match);
@@ -539,60 +584,89 @@ class Model
     }
 
     /**
-     * @return string
+     * Builds and returns a connection string based on the current connection properties.
+     *
+     * @return string The complete connection string containing host, port, user, password, and database name.
      */
     public function connectString(): string
     {
-        $connectString = "";
-        if ($this->postgishost != "")
-            $connectString = "host=" . $this->postgishost;
-        if ($this->postgisport != "")
-            $connectString = $connectString . " port=" . $this->postgisport;
-        if ($this->postgisuser != "")
-            $connectString = $connectString . " user=" . $this->postgisuser;
-        if ($this->postgispw != "")
-            $connectString = $connectString . " password=" . $this->postgispw;
-        if ($this->postgisdb != "")
-            $connectString = $connectString . " dbname=" . $this->postgisdb;
-        return ($connectString);
+        $connectString = "host=" . $this->connection->host;
+        $connectString .= " port=" . $this->connection->port;
+        $connectString .= " user=" . $this->connection->user;
+        $connectString .= " password=" . $this->connection->password;
+        $connectString .= " dbname=" . $this->connection->database;
+        return $connectString;
     }
 
     /**
-     * @param string $type
-     * @throws PDOException
+     * Establishes a database connection based on the specified connection type.
+     *
+     * @param string $type The type of connection to establish. Defaults to "PDO". Supported types are:
+     *                     - "PDO": Connect using a PDO instance.
+     *                     - "PG": Connect using the native pg_connect function.
+     *
+     * @return void
      */
     function connect(string $type = "PDO"): void
     {
         switch ($type) {
             case "PG" :
                 $c = pg_connect($this->connectString());
-                $this->db = $c ?: null;
+                $this->PgConnection = $c ?: null;
                 break;
             case "PDO" :
-                $this->db = new PDO("pgsql:dbname=$this->postgisdb;host=$this->postgishost;" . (($this->postgisport) ? "port=$this->postgisport" : ""), "$this->postgisuser", "$this->postgispw", [PDO::ATTR_EMULATE_PREPARES => true]);
-                $this->execQuery("set client_encoding='UTF8'");
+                if (empty($this->getPdoConnection()) || !$this->isPdoConnected()) {
+                    //error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
+                    $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port}", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
+                    $this->execQuery("set client_encoding='UTF8'");
+                }
                 break;
         }
     }
 
     /**
+     * Checks if the PDO connection is successfully established.
      *
+     * @return bool Returns true if the PDO connection is active and responsive, otherwise false.
+     */
+    private function isPdoConnected(): bool
+    {
+        try {
+            // Lightweight no-op query
+            $this->getPdoConnection()->query('SELECT 1');
+            return true;
+        } catch (PDOException $e) {
+            // Could be connected, but the check above is aborted due to an error and no rollback
+            if ($this->getPdoConnection()->inTransaction()) {
+                return true;
+            }
+            error_log("PDO connection failed: " . $e->getMessage());
+            return false;
+        }
+    }
+
+
+    /**
+     * Closes the current database connection by unsetting the PDO instance.
+     *
+     * @return void
      */
     function close(): void
     {
-        $this->db = null;
+        $this->unsetPdoConnection();
     }
 
     /**
-     * @param string $str
-     * @return string
+     * Quotes a string for use in a database query.
+     *
+     * @param string $str The string to be quoted.
+     *
+     * @return string The quoted string, safe for use in database queries.
      */
     function quote(string $str): string
     {
-        if (!$this->db) {
-            $this->connect();
-        }
-        $str = $this->db->quote($str);
+        $this->connect();
+        $str = $this->getPdoConnection()->quote($str);
         return ($str);
     }
 
@@ -666,22 +740,32 @@ class Model
         return $response;
     }
 
+
     /**
-     * @param string $str
-     * @param array<string>|null $replace
-     * @param string $delimiter
-     * @return string
+     * Converts a given string to its ASCII representation, optionally replacing certain substrings,
+     * removing non-ASCII characters, and normalizing delimiters.
+     *
+     * @param string $str The input string to be converted to ASCII.
+     * @param array|null $replace An optional array of substrings to replace with spaces before processing.
+     * @param string $delimiter The delimiter to replace matching patterns in the string.
+     * @param string $delimiterRegex The regular expression for identifying patterns to replace with the delimiter.
+     * @param bool $skipEmail Whether to skip conversion if the input string is a valid email address. Defaults to true.
+     *
+     * @return string The ASCII-converted string with applied transformations.
      */
-    public static function toAscii(string $str, ?array $replace = [], string $delimiter = '-'): string
+    public static function toAscii(string $str, ?array $replace = [], string $delimiter = '-', string $delimiterRegex = "/[\/_|+ -]+/", bool $skipEmail = true): string
     {
+        if (filter_var($str, FILTER_VALIDATE_EMAIL) !== false && $skipEmail) {
+            return $str;
+        }
         if (!empty($replace)) {
             $str = str_replace($replace, ' ', $str);
         }
-
         $clean = iconv('UTF-8', 'ASCII//TRANSLIT', $str);
         $clean = preg_replace("/[^a-zA-Z0-9\/_|+ -]/", '', $clean);
         $clean = strtolower(trim($clean, '-'));
-        return preg_replace("/[\/_|+ -]+/", $delimiter, $clean);
+        $clean = preg_replace($delimiterRegex, $delimiter, $clean);
+        return $clean;
     }
 
     /**
@@ -710,10 +794,24 @@ class Model
     {
         if (str_contains($name, '.')) {
             $split = self::explodeTableName($name);
-            return "\"" . $split["schema"] . "\".\"" . $split["table"] . "\"";
-        } else {
-            return "\"" . $name . "\"";
+            $schema = $split["schema"];
+            $table = $split["table"];
 
+            // Only add quotes if not already present
+            if (!str_starts_with($schema, '"') || !str_ends_with($schema, '"')) {
+                $schema = "\"" . $schema . "\"";
+            }
+            if (!str_starts_with($table, '"') || !str_ends_with($table, '"')) {
+                $table = "\"" . $table . "\"";
+            }
+
+            return $schema . "." . $table;
+        } else {
+            // Only add quotes if not already present
+            if (!str_starts_with($name, '"') || !str_ends_with($name, '"')) {
+                return "\"" . $name . "\"";
+            }
+            return $name;
         }
     }
 
@@ -737,8 +835,8 @@ class Model
     public function isTableOrView(string $table): array
     {
         $cacheType = "isTableOrView";
-        $cacheRel = $table;
-        $cacheId = $this->postgisdb . "_" . $cacheRel . "_" . $cacheType;
+        $cacheRel = md5($table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -747,7 +845,7 @@ class Model
             // Check if table
             $sql = "SELECT count(*) AS count FROM pg_tables WHERE schemaname = '$bits[0]' AND tablename='$bits[1]'";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             if ($row["count"] > 0) {
                 $response['data'] = "TABLE";
@@ -760,7 +858,7 @@ class Model
             // Check if view
             $sql = "SELECT count(*) AS count FROM pg_views WHERE schemaname = '$bits[0]' AND viewname='$bits[1]'";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             if ($row["count"] > 0) {
                 $response['data'] = "VIEW";
@@ -772,7 +870,7 @@ class Model
             // Check if materialized view
             $sql = "SELECT count(*) AS count FROM pg_matviews WHERE schemaname = '$bits[0]' AND matviewname='$bits[1]'";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             if ($row["count"] > 0) {
                 $response['data'] = "MATERIALIZED VIEW";
@@ -784,7 +882,7 @@ class Model
             // Check if FOREIGN TABLE
             $sql = "SELECT COUNT(*) FROM pg_catalog.pg_foreign_table ft JOIN pg_catalog.pg_class c ON ft.ftrelid = c.oid JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE n.nspname = '$bits[0]' AND c.relname = '$bits[1]'";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             if ($row["count"] > 0) {
                 $response['data'] = "FOREIGN TABLE";
@@ -811,7 +909,7 @@ class Model
             $response = [];
             $sql = "SELECT PostGIS_Lib_Version()";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             $response['success'] = true;
             $response['version'] = $row["postgis_lib_version"];
@@ -834,8 +932,8 @@ class Model
     public function doesColumnExist(string $table, string $column): array
     {
         $cacheType = "columnExist";
-        $cacheRel = $table;
-        $cacheId = $this->postgisdb . "_" . $cacheRel . "_" . $column . "_" . $cacheType;
+        $cacheRel = md5($table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $column . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -844,12 +942,11 @@ class Model
             $bits = explode(".", $table);
             $sql = "SELECT true AS exists FROM pg_attribute WHERE attrelid = '\"$bits[0]\".\"$bits[1]\"'::regclass AND attname = '$column' AND NOT attisdropped";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
             $response['success'] = true;
             $response['exists'] = isset($row["exists"]);
             $CachedString->set($response)->expiresAfter(Globals::$cacheTtl);//in seconds, also accepts Datetime
-            //$CachedString->addTags([$cacheType, $cacheRel, $this->postgisdb]);
             Cache::save($CachedString);
             return $response;
         }
@@ -863,8 +960,8 @@ class Model
     public function getForeignConstrains(string|null $schema, string $table): array
     {
         $cacheType = "foreignConstrain";
-        $cacheRel = ($schema . "." . $table);
-        $cacheId = ($this->postgisdb . "_" . $cacheRel . "_" . $cacheType);
+        $cacheRel = md5($schema . "." . $table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -897,7 +994,7 @@ class Model
                         JOIN  pg_namespace ns on cl.relnamespace = ns.oid";
 
             $res = $this->prepare($sql);
-            $res->execute(["table" => $table, "schema" => $schema]);
+            $this->execute($res, ["table" => $table, "schema" => $schema]);
             $rows = $this->fetchAll($res, 'assoc');
             $response['success'] = true;
             $response['data'] = $rows;
@@ -912,8 +1009,8 @@ class Model
     public function getConstrains(string|null $schema, string $table, ?string $type = null): array
     {
         $cacheType = "checkConstrain";
-        $cacheRel = ($schema . "." . $table);
-        $cacheId = ($this->postgisdb . "_" . $cacheRel . "_" . $type . "_" . $cacheType);
+        $cacheRel = md5($schema . "." . $table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $type . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         $where = '';
         $params = ["table" => $table, "schema" => $schema];
@@ -943,14 +1040,13 @@ class Model
                     att.attrelid = con.conrelid AND att.attnum = con.key";
 
             $res = $this->prepare($sql);
-            $res->execute($params);
+            $this->execute($res, $params);
             $rows = $this->fetchAll($res, 'assoc');
 
             $response['success'] = true;
             $response['data'] = $rows;
 
             $CachedString->set($response)->expiresAfter(Globals::$cacheTtl);//in seconds, also accepts Datetime
-            //$CachedString->addTags([$cacheType, $cacheRel, $this->postgisdb]);
             Cache::save($CachedString);
             return $response;
         }
@@ -964,8 +1060,8 @@ class Model
     public function getChildTables(string $schema, string $table): array
     {
         $cacheType = "childTables";
-        $cacheRel = ($schema . "." . $table);
-        $cacheId = ($this->postgisdb . "_" . $cacheRel . "_" . $cacheType);
+        $cacheRel = md5($schema . "." . $table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -991,7 +1087,7 @@ class Model
                    ";
 
             $res = $this->prepare($sql);
-            $res->execute(["table" => $table, "schema" => $schema]);
+            $this->execute($res, ["table" => $table, "schema" => $schema]);
 
             while ($row = $this->fetchRow($res)) {
                 $response['data'][] = [
@@ -1015,18 +1111,17 @@ class Model
     public function getColumns(string $schema, string $table): array
     {
         $cacheType = "columns";
-        $cacheRel = ($schema . "." . $table);
-        $cacheId = ($this->postgisdb . "_" . $cacheRel . "_" . $cacheType);
+        $cacheRel = md5($schema . "." . $table);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
         } else {
             $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''','raster_columns.r_table_schema = ''$schema'' AND raster_columns.r_table_name = ''$table''')";
             $res = $this->prepare($sql);
-            $res->execute();
+            $this->execute($res);
             $rows = $this->fetchAll($res);
             $CachedString->set($rows)->expiresAfter(Globals::$cacheTtl);//in seconds, also accepts Datetime
-            //   $CachedString->addTags([$cacheType, $cacheRel, $this->postgisdb]);
             Cache::save($CachedString);
             return $rows;
         }
@@ -1045,7 +1140,7 @@ class Model
         $sql = "SELECT count(*) AS count FROM " . $this->doubleQuoteQualifiedName($schema . "." . $table);
         $res = $this->prepare($sql);
         try {
-            $res->execute();
+            $this->execute($res);
             $row = $this->fetchRow($res);
         } catch (Exception $e) {
             $response['success'] = false;
@@ -1116,7 +1211,7 @@ class Model
                 AND t.relname = :table
                 ORDER BY 1, 2, 3, 4";
         $res = $this->prepare($sql);
-        $res->execute(["schema" => $schema, "table" => $table]);
+        $this->execute($res, ["schema" => $schema, "table" => $table]);
         while ($row = $this->fetchRow($res)) {
             $response["index_method"][$row["column_name"]][] = $row["index_method"];
             $response["is_primary"][$row["column_name"]] = !empty($response["is_primary"][$row["column_name"]]) ? $response["is_primary"][$row["column_name"]] : $row["is_primary"];
@@ -1131,7 +1226,7 @@ class Model
     {
         $sql = "CREATE VIEW " . $name . " AS " . $statement;
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
     }
 
     public function createMatView(string $statement, string $name, bool $withNoData = false): void
@@ -1141,7 +1236,7 @@ class Model
             $sql .= " WITH NO DATA";
         }
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
     }
 
     public function getTablesFromSchema(string $schema): array
@@ -1149,7 +1244,7 @@ class Model
         $response = [];
         $sql = "SELECT tablename as name FROM pg_tables WHERE schemaname = :schema";
         $res = $this->prepare($sql);
-        $res->execute(["schema" => $schema]);
+        $this->execute($res, ["schema" => $schema]);
         while ($row = $this->fetchRow($res)) {
             $response[] = $row["name"];
         }
@@ -1162,7 +1257,7 @@ class Model
         $sql = "SELECT viewname as name, schemaname, viewowner as owner,definition, 'f' as ismat FROM pg_views WHERE schemaname = :schema union ";
         $sql .= "SELECT matviewname as name, schemaname, matviewowner as owner, definition, 't' as ismat FROM pg_matviews WHERE schemaname = :schema";
         $res = $this->prepare($sql);
-        $res->execute(['schema' => $schema]);
+        $this->execute($res, ['schema' => $schema]);
         while ($row = $this->fetchRow($res)) {
             $tmp = [];
             $tmp['name'] = $row['name'];
@@ -1184,7 +1279,7 @@ class Model
                              JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
                     WHERE n.nspname = :schema";
         $res = $this->prepare($sql);
-        $res->execute(["schema" => $schema]);
+        $this->execute($res, ["schema" => $schema]);
         while ($row = $this->fetchRow($res)) {
             $response[] = $row["name"];
         }
@@ -1202,8 +1297,7 @@ class Model
      */
     public function storeViewsFromSchema(array $schemas): int
     {
-        $db = new Database();
-        $this->connect();
+        $db = new Database(connection: $this->connection);
         $this->begin();
         $count = 0;
         foreach ($schemas as $schema) {
@@ -1272,8 +1366,7 @@ class Model
             $targetSchemas = $schemas;
         }
         $count = 0;
-        $db = new Database();
-        $this->connect();
+        $db = new Database(connection: $this->connection);;
         $this->begin();
         for ($i = 0; $i < sizeof($schemas); $i++) {
             $schema = $schemas[$i];
@@ -1325,8 +1418,7 @@ class Model
             $targetSchemas = $schemas;
         }
 
-        $db = new Database();
-        $this->connect();
+        $db = new Database(connection: $this->connection);;
         $this->begin();
         for ($i = 0; $i < sizeof($schemas); $i++) {
             $schema = $schemas[$i];
@@ -1364,8 +1456,7 @@ class Model
             $targetSchemas = $schemas;
         }
 
-        $db = new Database();
-        $this->connect();
+        $db = new Database(connection: $this->connection);
         $this->begin();
         $count = 0;
         for ($i = 0; $i < sizeof($schemas); $i++) {
@@ -1435,8 +1526,7 @@ class Model
      */
     public function deleteForeignTables(array $schemas, ?array $include = null): int
     {
-        $db = new Database();
-        $this->connect();
+        $db = new Database(connection: $this->connection);
         $this->begin();
         $count = 0;
         foreach ($schemas as $schema) {
@@ -1490,7 +1580,7 @@ class Model
                   AND i.schemaname NOT LIKE 'pg_%' and i.relname != 'spatial_ref_sys'";
 
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
         $totalSize = 0;
         $tables = [];
         foreach ($this->fetchAll($res, 'assoc') as $table) {
@@ -1499,10 +1589,10 @@ class Model
         }
         $sql = "select pg_size_pretty($totalSize::bigint) as p";
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
         $row = $res->fetchAll();
         try {
-            $cost = (new Cost())->getCost();
+            $cost = (new Cost(connection: $this->connection))->getCost();
         } catch (PDOException) {
             $cost = 0.0;
         }
@@ -1532,7 +1622,7 @@ class Model
                   and tablename != 'spatial_ref_sys'";
 
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
         return $res->fetchColumn();
     }
 
@@ -1561,8 +1651,8 @@ class Model
     protected function getColumnComments(string $schema, string $table): array
     {
         $cacheType = 'colComments';
-        $cacheRel = $schema . '.' . $table;
-        $cacheId = $this->postgisdb . '_' . $cacheRel . '_' . $cacheType;
+        $cacheRel = md5($schema . '.' . $table);
+        $cacheId = $this->connection->database . '_' . $cacheRel . '_' . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -1584,7 +1674,7 @@ class Model
                 ORDER BY a.attnum";
 
             $res = $this->prepare($sql);
-            $res->execute(['table' => $table, 'schema' => $schema]);
+            $this->execute($res, ['table' => $table, 'schema' => $schema]);
             $comments = [];
             foreach ($res->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $comments[$row['column_name']] = $row['column_comment'];
@@ -1604,8 +1694,8 @@ class Model
     public function getTableComment(string $schema, string $table): ?string
     {
         $cacheType = 'tableComment';
-        $cacheRel = $schema . '.' . $table;
-        $cacheId = $this->postgisdb . '_' . $cacheRel . '_' . $cacheType;
+        $cacheRel = md5($schema . '.' . $table);
+        $cacheId = $this->connection->database . '_' . $cacheRel . '_' . $cacheType;
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {
             return $CachedString->get();
@@ -1619,11 +1709,176 @@ class Model
                   AND c.relname = :table";
 
             $res = $this->prepare($sql);
-            $res->execute(['table' => $table, 'schema' => $schema]);
+            $this->execute($res, ['table' => $table, 'schema' => $schema]);
             $comment = $res->fetchColumn();
             $CachedString->set($comment)->expiresAfter(Globals::$cacheTtl);
             Cache::save($CachedString);
             return $comment;
         }
+    }
+
+    /**
+     * Retrieves information about sequences in the specified schema.
+     *
+     * @param string $schema The name of the schema for which to retrieve sequence details.
+     *
+     * @return array An associative array containing sequence information. The 'data' key contains an array
+     *               of sequences with their details, and the 'success' key indicates the operation status.
+     */
+    public function getSequences(string $schema): array
+    {
+        $sql = "WITH seq AS (
+                        SELECT *
+                        FROM pg_sequences
+                        WHERE schemaname = :schema
+                    )
+                    
+                    SELECT
+                        s.sequencename AS name,
+                        s.start_value,
+                        s.min_value,
+                        s.max_value,
+                        s.data_type,
+                        s.increment_by,
+                        s.cache_size,
+                        s.schemaname||'.'||tbl.relname||'.'||att.attname as owned_by
+                    FROM seq s
+                             JOIN pg_class c
+                                  ON c.relname = s.sequencename
+                             JOIN pg_namespace n
+                                  ON n.oid = c.relnamespace AND n.nspname = s.schemaname
+                             LEFT JOIN pg_depend d
+                                       ON d.objid = c.oid AND d.deptype = 'a'
+                             LEFT JOIN pg_class tbl
+                                       ON tbl.oid = d.refobjid
+                             LEFT JOIN pg_attribute att
+                                       ON att.attrelid = tbl.oid AND att.attnum = d.refobjsubid
+                    ORDER BY s.sequencename";
+        $res = $this->prepare($sql);
+        $this->execute($res, ['schema' => $schema]);
+        $rows = $this->fetchAll($res, 'assoc');
+        $response['success'] = true;
+        $response['data'] = $rows;
+        return $response;
+
+    }
+
+    /**
+     * Creates a new sequence in the specified schema with the provided configuration.
+     *
+     * @param string $name The name of the sequence to be created.
+     * @param string $schema The schema in which the sequence will be created.
+     * @param array $ddl The definition parameters for the sequence, such as data type, increment value, start value, minimum and maximum values, and cache size.
+     * @param bool $withOwner Determines whether the sequence should be associated with an owner. If false, the sequence will not have an owner.
+     *
+     * @return string The name of the created sequence after processing.
+     */
+    public function createSequence(string $name, string $schema, array $ddl, bool $withOwner = true): string
+    {
+        if (!isset($ddl['data_type'])) $ddl['data_type'] = 'bigint';
+        if (!isset($ddl['increment_by'])) $ddl['increment_by'] = '1';
+        if (!isset($ddl['start_value'])) $ddl['start_value'] = '1';
+        if (!isset($ddl['cache_size'])) $ddl['cache_size'] = '1';
+        if (!isset($ddl['owned_by']) || !$withOwner) $ddl['owned_by'] = 'NONE';
+
+        $ddl['min_value'] = isset($ddl['min_value']) ? "MINVALUE {$ddl['min_value']}" : 'NO MINVALUE';
+        $ddl['max_value'] = isset($ddl['max_value']) ? "MAXVALUE {$ddl['max_value']}" : 'NO MAXVALUE';
+
+        $name = self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/");
+        $sql = "CREATE SEQUENCE $schema.$name AS {$ddl['data_type']}
+        INCREMENT BY {$ddl['increment_by']}
+        {$ddl['min_value']}
+        {$ddl['max_value']}
+        START WITH {$ddl['start_value']}
+        CACHE {$ddl['cache_size']}
+        OWNED BY {$ddl['owned_by']}";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+        return $name;
+    }
+
+    /**
+     * Alters the properties of a database sequence.
+     *
+     * @param string $name The current name of the sequence to be altered.
+     * @param string $schema The schema in which the sequence exists.
+     * @param array $ddl An associative array containing the modifications to be applied to the sequence.
+     *                    Supported keys include:
+     *                    - `name` (string): Rename the sequence to a new name.
+     *                    - `data_type` (string): Specify a new data type for the sequence.
+     *                    - `increment_by` (int): Change the increment value for the sequence.
+     *                    - `min_value` (int|null): Set a new minimum value for the sequence, or `null` to reset to no minimum value.
+     *                    - `max_value` (int|null): Set a new maximum value for the sequence, or `null` to reset to no maximum value.
+     *                    - `start_value` (int): Define a new starting value for the sequence.
+     *                    - `restart_value` (int): Restart the sequence at a specified value.
+     *                    - `cache_size` (int): Set the number of sequence values to cache.
+     *                    - `owned_by` (string): Define the table column that owns the sequence.
+     *
+     * @return string The final name of the sequence after any potential renaming.
+     */
+    public function alterSequence(string $name, string $schema, array $ddl): string
+    {
+        $name = self::toAscii(str: $name, delimiterRegex: "/[\/|+ -]+/");
+
+        // Handle rename if name differs
+        if (isset($ddl['name']) && $ddl['name'] !== $name) {
+            $newName = self::toAscii(str: $ddl['name'], delimiterRegex: "/[\/|+ -]+/");
+            $sql = "ALTER SEQUENCE $schema.$name RENAME TO $newName";
+            $res = $this->prepare($sql);
+            $this->execute($res);
+            $name = $newName;
+        }
+
+        $alterParts = [];
+
+        if (isset($ddl['data_type'])) {
+            $alterParts[] = "AS {$ddl['data_type']}";
+        }
+        if (isset($ddl['increment_by'])) {
+            $alterParts[] = "INCREMENT BY {$ddl['increment_by']}";
+        }
+        if (isset($ddl['min_value'])) {
+            $alterParts[] = "MINVALUE {$ddl['min_value']}";
+        } elseif (array_key_exists('min_value', $ddl) && $ddl['min_value'] === null) {
+            $alterParts[] = "NO MINVALUE";
+        }
+        if (isset($ddl['max_value'])) {
+            $alterParts[] = "MAXVALUE {$ddl['max_value']}";
+        } elseif (array_key_exists('max_value', $ddl) && $ddl['max_value'] === null) {
+            $alterParts[] = "NO MAXVALUE";
+        }
+        if (isset($ddl['start_value'])) {
+            $alterParts[] = "START WITH {$ddl['start_value']}";
+        }
+        if (isset($ddl['restart_value'])) {
+            $alterParts[] = "RESTART WITH {$ddl['restart_value']}";
+        }
+        if (isset($ddl['cache_size'])) {
+            $alterParts[] = "CACHE {$ddl['cache_size']}";
+        }
+        if (isset($ddl['owned_by'])) {
+            $alterParts[] = "OWNED BY {$ddl['owned_by']}";
+        }
+
+        if (!empty($alterParts)) {
+            $sql = "ALTER SEQUENCE $schema.$name " . implode(' ', $alterParts);
+            $res = $this->prepare($sql);
+            $this->execute($res);
+        }
+        return $name;
+    }
+
+    /**
+     * Deletes a sequence from the database.
+     *
+     * @param string $name The name of the sequence to be deleted.
+     * @param string $schema
+     * @return void
+     */
+    public function deleteSequence(string $name, string $schema): void
+    {
+        $sql = "DROP SEQUENCE $schema.$name";
+        $res = $this->prepare($sql);
+        $this->execute($res);
     }
 }
