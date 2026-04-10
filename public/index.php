@@ -356,8 +356,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/tileseeder/{action}/{uuid}", function () {
@@ -367,8 +367,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/tileseeder/", function () {
@@ -378,8 +378,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/scheduler", function () {
@@ -389,8 +389,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb("gc2scheduler");
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
 
@@ -401,8 +401,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
 
@@ -410,8 +410,8 @@ $handler = static function () use ($routes) {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
 
@@ -419,8 +419,8 @@ $handler = static function () use ($routes) {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
 
@@ -431,8 +431,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/foreign", function () {
@@ -442,8 +442,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-                } else {
-                    echo Response::toJson($jwt);
+//                } else {
+//                    echo Response::toJson($jwt);
                 }
             });
 

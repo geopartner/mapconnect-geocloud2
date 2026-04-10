@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2023 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -156,25 +157,37 @@ class Route2
             $response = $controller->$action($r);
             $data = $response->getData();
             $status = $response->getStatus();
-            header("HTTP/1.0 $status " . Util::httpCodeText($status));
+            // Clear output buffer to ensure headers can be sent
+            if (ob_get_level() > 0 && !headers_sent()) {
+                ob_clean();
+            }
+            if (!headers_sent()) {
+                header("HTTP/1.0 $status " . Util::httpCodeText($status));
+            }
 
             if ($status == 302) {
                 return;
             }
             // Ensure no Content-Type (or body) is sent for 204/303
             if ($status == 204) {
-                header_remove('Content-Type');
-                header_remove('Content-Length');
+                if (!headers_sent()) {
+                    header_remove('Content-Type');
+                    header_remove('Content-Length');
+                }
                 return;
             }
 
             if ($data !== null) {
                 if (getType($data) == "string") {
-                    header('Content-type: text/plain; charset=utf-8');
+                    if (!headers_sent()) {
+                        header('Content-type: text/plain; charset=utf-8');
+                    }
                     echo $data;
                     return;
                 }
-                header('Content-type: application/json; charset=utf-8');
+                if (!headers_sent()) {
+                    header('Content-type: application/json; charset=utf-8');
+                }
                 echo json_encode($data, JSON_UNESCAPED_UNICODE);
             }
         }
@@ -196,7 +209,9 @@ class Route2
     public function miss(): void
     {
         if (!$this->isMatched) {
-            header('HTTP/1.0 404 Not Found');
+            if (!headers_sent()) {
+                header('HTTP/1.0 404 Not Found');
+            }
             echo "<h1>404 Not Found</h1>";
         }
     }
