@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -113,7 +114,11 @@ Cache::setInstance();
 
 function setHeaders(): void
 {
-    // TODO tjek header is set
+    // tjek header is set
+    if (headers_sent()) {
+        return;
+    }
+    
     // Write Access-Control-Allow-Origin if origin is white listed
     $http_origin = $_SERVER['HTTP_ORIGIN'] ?? null;
     if (isset(App::$param["AccessControlAllowOrigin"]) && in_array($http_origin, App::$param["AccessControlAllowOrigin"])) {
