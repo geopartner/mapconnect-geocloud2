@@ -1,6 +1,7 @@
 /*
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2019 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *  
  */
@@ -5076,7 +5077,9 @@ setInterval(function () {
             }
         },
         error: function () {
-            alert("Noget gik galt. Prøv at refreshe din browser");
+            //TODO: Why are we haunted by badgateway?
+            //alert("Noget gik galt. Prøv at refreshe din browser");
+            console.error("Noget gik galt. Prøv at refreshe din browser");
         }
     });
 }, 2000);
