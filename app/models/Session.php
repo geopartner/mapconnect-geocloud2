@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2025 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -25,9 +26,6 @@ use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use Psr\Cache\InvalidArgumentException;
 use stdClass;
 
-const USER_DATABASE = 'mapcentia';
-
-
 /**
  * Class Session
  * @package app\models
@@ -36,7 +34,7 @@ class Session extends Model
 {
     function __construct()
     {
-        parent::__construct(new Connection(database: USER_DATABASE));
+        parent::__construct(new Connection(database: 'mapcentia'));
     }
 
     /**

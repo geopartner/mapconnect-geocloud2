@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2021 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -17,8 +18,6 @@ use PDOException;
 use Phpfastcache\Exceptions\PhpfastcacheLogicException;
 use Psr\Cache\InvalidArgumentException;
 use stdClass;
-
-const USER_DATABASE = 'mapcentia';
 
 /**
  * Class Setting
@@ -294,7 +293,7 @@ class Setting extends Model
             $response['data'] = $arr;
 
             // Get userGroups from mapcentia database
-            $users = new Model(new \app\inc\Connection(database: USER_DATABASE));
+            $users = new Model(new \app\inc\Connection(database: 'mapcentia'));
             $sQuery = "SELECT * FROM users WHERE parentdb = :parentDb";
             $users->connect();
             $res = $users->prepare($sQuery);
