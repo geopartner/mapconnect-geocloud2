@@ -205,15 +205,16 @@ class Controller
                     continue;
                 }
                 if ($subUser) {
-                    $privileges = (array)json_decode($row["privileges"]);
+                    $privileges = !empty($row["privileges"]) ? (json_decode($row["privileges"], true) ?: []) : [];
+                    $key = $userGroup ?: $subUser;
                     $response['auth_level'] = $auth;
                     if ($isAuth) {
-                        $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser];
+                        $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser] ?? null;
                         $response['session'] = $session;
                         $response[self::USED_RELS_KEY] = $rels;
                         switch ($transaction) {
                             case false:
-                                if ((empty($privileges[$userGroup ?: $subUser]) || (!empty($privileges[$userGroup ?: $subUser]) && $privileges[$userGroup ?: $subUser] == "none")) && ($subUser != $schema && $userGroup != $schema)) {
+                                if ((empty($privileges[$key]) || (!empty($privileges[$key]) && $privileges[$key] == "none")) && ($subUser != $schema && $userGroup != $schema)) {
                                     // Always let subusers read from layers open to all
                                     if ($auth == "Write") {
                                         $response['success'] = true;
