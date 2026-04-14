@@ -20,7 +20,7 @@ use \app\conf\App;
 <link rel="stylesheet" href="/js/ext/examples/ux/gridfilters/css/GridFilters.css"/>
 <link rel="stylesheet" href="/js/ext/examples/ux/gridfilters/css/RangeMenu.css"/>
 
-<link rel="stylesheet" href="/css/build/styles.min.7ac0fcf833facf8b.7ac0fcf833facf8b.css">
+<link rel="stylesheet" href="/css/build/styles.min.css">
 
 </head>
 <body>
@@ -165,10 +165,10 @@ use \app\conf\App;
 <script src="//maps.googleapis.com/maps/api/js=<?php echo App::$param["googleApiKey"] ?? ""; ?>&v=3&libraries=places"></script>
 <script src="/js/OpenLayers-2.12/OpenLayers.gc2.js"></script>
 
-<script src="/js/admin/build/all.min.5a7c97b94f9f901c.5a7c97b94f9f901c.js"></script>
+<script src="/js/admin/build/all.min.js"></script>
 
-<script src="/api/v1/js/api.be89462101e8b88a.be89462101e8b88a.js"></script>
-<script src="/api/v3/js/geocloud.389ece910c1089ae.389ece910c1089ae.js"></script>
+<script src="/api/v1/js/api.js"></script>
+<script src="/api/v3/js/geocloud.js"></script>
 
 </body>
 </html>

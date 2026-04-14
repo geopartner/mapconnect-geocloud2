@@ -202,11 +202,11 @@ class Setting extends Model
             return $response;
         }
 
-        $obj = (array)$arr->extentrestricts;
+        $obj = isset($arr->extentrestricts) ? (array)$arr->extentrestricts : [];
         $obj[Connection::$param['postgisschema']] = $extentrestrict->extent;
         $arr->extentrestricts = $obj;
 
-        $obj = (array)$arr->zoomrestricts;
+        $obj = isset($arr->zoomrestricts) ? (array)$arr->zoomrestricts : [];
         $obj[Connection::$param['postgisschema']] = $extentrestrict->zoom;
         $arr->zoomrestricts = $obj;
 

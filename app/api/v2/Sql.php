@@ -281,7 +281,7 @@ class Sql extends Controller
             $geofence = new Geofence($userFilter);
             $auth = $geofence->authorize($rules);
             $finaleStatement = $factory->createFromAST($select, true)->getSql();
-            if ($auth["access"] == Geofence::LIMIT_ACCESS) {
+            if (!empty($auth["access"]) && $auth["access"] == Geofence::LIMIT_ACCESS) {
                 try {
                     $geofence->postProcessQuery($select, $rules, Input::get('params'), $typeHints);
                 } catch (Exception $e) {

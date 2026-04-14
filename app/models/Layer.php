@@ -420,8 +420,9 @@ class Layer extends Table
                 $userGroup = $_SESSION["usergroup"] ?? $jwt['userGroup'] ?? null;
 
                 if ($subUser) {
-                    $privileges = (array)json_decode($row["privileges"]);
-                    if (($privileges[$userGroup ?: $userName] != "none" && $privileges[$userGroup ?: $userName])) {
+                    $privileges = !empty($row["privileges"]) ? (json_decode($row["privileges"], true) ?: []) : [];
+                    $key = $userGroup ?: $userName;
+                    if (($privileges[$key] ?? null) != "none" && !empty($privileges[$key])) {
                         $response['data'][] = $arr;
                     } elseif ($userName == $schema || $userGroup == $schema) {
                         $response['data'][] = $arr;
