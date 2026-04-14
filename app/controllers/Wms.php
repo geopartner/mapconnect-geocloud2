@@ -178,7 +178,7 @@ class Wms extends Controller
      */
     private function getWmsSource(string $db, string $schema): array|false
     {
-        if (sizeof($this->layers) > 1) {
+        if (empty($this->layers) || sizeof($this->layers) > 1) {
             return false;
         }
         $source = null;
