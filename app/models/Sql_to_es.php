@@ -176,7 +176,7 @@ class Sql_to_es extends Model
 
                 unset($geometries);
 
-                $json .= json_encode(array("index" => array("_index" => $index, "_id" => $arr[$priKey])));
+                $json .= json_encode(array("index" => array("_index" => $index, "_id" => $arr[$priKey] ?? null)));
                 $json .= "\n";
                 $json .= json_encode($features);
                 $json .= "\n";
