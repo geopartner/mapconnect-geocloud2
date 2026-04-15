@@ -76,9 +76,17 @@ final class BasicAuth
                 throw new ServiceException($e->getMessage());
             }
             while ($row = $postgisObject->fetchRow($res)) {
-                $privileges = json_decode($row["privileges"]);
+                $privilegesRaw = $row["privileges"] ?? '';
+                $privileges = null;
+                if (is_string($privilegesRaw) && $privilegesRaw !== '') {
+                    $decodedPrivileges = json_decode($privilegesRaw);
+                    if (json_last_error() === JSON_ERROR_NONE && is_object($decodedPrivileges)) {
+                        $privileges = $decodedPrivileges;
+                    }
+                }
                 $prop = $userGroup ?: $this->user;
-                if ((!$privileges->$prop || $privileges->$prop == "none" || ($privileges->$prop == "read" && $isTransaction)) && ($prop != $schema)) {
+                $privilege = (is_object($privileges) && property_exists($privileges, (string)$prop)) ? $privileges->$prop : null;
+                if ((empty($privilege) || $privilege == "none" || ($privilege == "read" && $isTransaction)) && ($prop != $schema)) {
                     throw new ServiceException("You don't have privileges to this layer. Please contact the database owner, which can grant you privileges.");
                 }
             }
