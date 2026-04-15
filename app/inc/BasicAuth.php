@@ -63,7 +63,11 @@ final class BasicAuth
         // AUTHENTICATION SUCCESSFUL
         $schema = explode('.', $layerName)[0];
         if ($this->isSubuser && $this->user != $schema) {
-            $sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_ LIKE :schema";
+            
+         
+            //Lets not use the _SLOW_ view
+            //$sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_ LIKE :schema";
+            $sql = "SELECT * FROM settings.geometry_columns_join WHERE _key_ LIKE :schema";
             $postgisObject = new Model(connection: $this->connection);
             $res = $postgisObject->prepare($sql);
             try {

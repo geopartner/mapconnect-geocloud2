@@ -209,12 +209,12 @@ class Controller
                     $key = $userGroup ?: $subUser;
                     $response['auth_level'] = $auth;
                     if ($isAuth) {
-                        $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser] ?? null;
+                        $response['privileges'] = isset($privileges[$userGroup]) ? $privileges[$userGroup] : (isset($privileges[$subUser]) ? $privileges[$subUser] : null);
                         $response['session'] = $session;
                         $response[self::USED_RELS_KEY] = $rels;
                         switch ($transaction) {
                             case false:
-                                if ((empty($privileges[$key]) || (!empty($privileges[$key]) && $privileges[$key] == "none")) && ($subUser != $schema && $userGroup != $schema)) {
+                                if ((empty($privileges[$key] ?? null) || (!empty($privileges[$key] ?? null) && ($privileges[$key] ?? null) == "none")) && ($subUser != $schema && $userGroup != $schema)) {
                                     // Always let subusers read from layers open to all
                                     if ($auth == "Write") {
                                         $response['success'] = true;
@@ -230,7 +230,8 @@ class Controller
                                 }
                                 break;
                             default:
-                                if ((!$privileges[$userGroup ?: $subUser] || $privileges[$userGroup ?: $subUser] == "none" || $privileges[$userGroup ?: $subUser] == "read") && ($subUser != $schema && $userGroup != $schema)) {
+                                $privValue = isset($privileges[$userGroup ?: $subUser]) ? $privileges[$userGroup ?: $subUser] : null;
+                                if ((!$privValue || $privValue == "none" || $privValue == "read") && ($subUser != $schema && $userGroup != $schema)) {
                                     $response['success'] = false;
                                     $response['message'] = "You don't have privileges to edit '$layer'. Please contact the database owner, which can grant you privileges.";
                                     $response['code'] = 403;
@@ -242,7 +243,7 @@ class Controller
                         }
                     } else {
                         $response[self::USED_RELS_KEY] = $rels;
-                        $response['privileges'] = $privileges[$userGroup] ?? $privileges[$subUser];
+                        $response['privileges'] = isset($privileges[$userGroup]) ? $privileges[$userGroup] : (isset($privileges[$subUser]) ? $privileges[$subUser] : null);
                         $response['session'] = $session;
 
                         if ($auth == "Read/write" || ($transaction)) {
