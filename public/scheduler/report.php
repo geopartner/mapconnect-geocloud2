@@ -89,9 +89,9 @@
             $d2 = new DateTime();
             $interval = $d2->diff($d1);
             $lasttimestamp = $interval->format('%d days, %h hours, %i minutes');
-            $featureCount = is_int($report["featureCount"] / 1000) ? "<font color=\"orange\">{$report["featureCount"]}</font>" : $report["featureCount"];
-            $maxCellCount = is_int($report["maxCellCount"] / 1000) ? "<font color=\"orange\">{$report["maxCellCount"]}</font>" : $report["maxCellCount"];
-            $dupsCount = isset($report["dupsCount"]) && $report["dupsCount"] == 0 ? "<font color=\"orange\">{$report["dupsCount"]}</font>" : $report["dupsCount"];
+            $featureCount = isset($report["featureCount"]) && is_int($report["featureCount"] / 1000) ? "<font color=\"orange\">{$report["featureCount"]}</font>" : ($report["featureCount"] ?? "");
+            $maxCellCount = isset($report["maxCellCount"]) && is_int($report["maxCellCount"] / 1000) ? "<font color=\"orange\">{$report["maxCellCount"]}</font>" : ($report["maxCellCount"] ?? "");
+            $dupsCount = isset($report["dupsCount"]) && $report["dupsCount"] == 0 ? "<font color=\"orange\">{$report["dupsCount"]}</font>" : ($report["dupsCount"] ?? "");
             $waited = $report["sleep"] ?? "0";
             $inactiveClass = !$row['active'] ? 'class="table-danger"' : '';
 
