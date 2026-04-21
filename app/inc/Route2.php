@@ -1,8 +1,7 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2023 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
+ * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -13,6 +12,7 @@ use app\api\v4\AbstractApi;
 use app\api\v4\AcceptableAccepts;
 use app\api\v4\AcceptableMethods;
 use app\api\v4\AcceptableContentTypes;
+use app\api\v4\Controller;
 use app\api\v4\ApiInterface;
 use app\exceptions\GC2Exception;
 use Closure;
@@ -107,6 +107,7 @@ class Route2
             }
             $contentType = Input::getContentType() ? trim(explode(';', Input::getContentType())[0]) : "application/json";
             $accepts = Input::getAccept() ? array_map(fn($str) => trim(explode(';', $str)[0]), explode(',', Input::getAccept())) : ["*/*"];
+            // Check AcceptableMethods
             $attributes = $reflectionClass->getAttributes(AcceptableMethods::class);
             foreach ($attributes as $attribute) {
                 $listener = $attribute->newInstance();
@@ -128,7 +129,19 @@ class Route2
                         return;
                     }
                 }
+
             }
+            // Check scope
+            $attributes = $reflectionClass->getAttributes(Controller::class);
+            foreach ($attributes as $attribute) {
+                $listener = $attribute->newInstance();
+                if ($listener::class == Controller::class) {
+                    if (isset($this->jwt)) {
+                        $listener->checkScope($this->jwt);
+                    }
+                }
+            }
+
             foreach ($reflectionMethods as $reflectionMethod) {
                 if ($reflectionMethod->getName() == $action) {
                     $attributes = $reflectionMethod->getAttributes(AcceptableContentTypes::class);
@@ -157,37 +170,25 @@ class Route2
             $response = $controller->$action($r);
             $data = $response->getData();
             $status = $response->getStatus();
-            // Clear output buffer to ensure headers can be sent
-            if (ob_get_level() > 0 && !headers_sent()) {
-                ob_clean();
-            }
-            if (!headers_sent()) {
-                header("HTTP/1.0 $status " . Util::httpCodeText($status));
-            }
+            header("HTTP/1.0 $status " . Util::httpCodeText($status));
 
             if ($status == 302) {
                 return;
             }
             // Ensure no Content-Type (or body) is sent for 204/303
             if ($status == 204) {
-                if (!headers_sent()) {
-                    header_remove('Content-Type');
-                    header_remove('Content-Length');
-                }
+                header_remove('Content-Type');
+                header_remove('Content-Length');
                 return;
             }
 
             if ($data !== null) {
                 if (getType($data) == "string") {
-                    if (!headers_sent()) {
-                        header('Content-type: text/plain; charset=utf-8');
-                    }
+                    header('Content-type: text/plain; charset=utf-8');
                     echo $data;
                     return;
                 }
-                if (!headers_sent()) {
-                    header('Content-type: application/json; charset=utf-8');
-                }
+                header('Content-type: application/json; charset=utf-8');
                 echo json_encode($data, JSON_UNESCAPED_UNICODE);
             }
         }
@@ -209,9 +210,7 @@ class Route2
     public function miss(): void
     {
         if (!$this->isMatched) {
-            if (!headers_sent()) {
-                header('HTTP/1.0 404 Not Found');
-            }
+            header('HTTP/1.0 404 Not Found');
             echo "<h1>404 Not Found</h1>";
         }
     }

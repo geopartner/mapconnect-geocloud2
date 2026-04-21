@@ -57,12 +57,34 @@ $RegisterPayloadWithPDO = function (array $batchPayload, string $db) use ($worke
 
 $opMap = ['I' => 'INSERT', 'U' => 'UPDATE', 'D' => 'DELETE'];
 
+$reduceFullData = function (array &$relData, string $op): void {
+    if (empty($relData[$op])) {
+        $relData['full_data'] = [];
+        return;
+    }
+    if (!empty($relData['full_data'])) {
+        $pkIndex = [];
+        foreach ($relData[$op] as $pkRef) {
+            $pkIndex[$pkRef[0] . ':' . $pkRef[1]] = true;
+        }
+        $relData['full_data'] = array_values(array_filter($relData['full_data'], function ($row) use ($pkIndex) {
+            foreach ($pkIndex as $key => $_) {
+                [$col, $val] = explode(':', $key, 2);
+                if (isset($row[$col]) && (string)$row[$col] === $val) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+    }
+};
+
 /**
  * Flush batch for a specific DB asynchronously.
  * Drains the outbox table and processes the events.
  */
-$flushBatch = function (string $db, string $channelName = '') use (&$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap) {
-    return async(function () use ($db, $channelName, &$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap) {
+$flushBatch = function (string $db, string $channelName = '') use (&$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap, $reduceFullData) {
+    return async(function () use ($db, $channelName, &$batchState, &$broadcastHandler, $preparePayloadWithPDO, $RegisterPayloadWithPDO, $opMap, $reduceFullData) {
         try {
             $pool = $batchState[$db]['pool'] ?? null;
             if (!$pool) {
@@ -106,7 +128,17 @@ $flushBatch = function (string $db, string $channelName = '') use (&$batchState,
             $payLoad = [];
             foreach ($coalesced as $row) {
                 $op = $opMap[$row['op']] ?? $row['op'];
-                $payLoad[] = "{$op},{$row['schema_name']},{$row['table_name']},{$row['pk_column']},{$row['pk_value']}";
+                $entry = [
+                    'op' => $op,
+                    'schema' => $row['schema_name'],
+                    'table' => $row['table_name'],
+                    'pk_column' => $row['pk_column'],
+                    'pk_value' => $row['pk_value'],
+                ];
+                if (!empty($row['payload'])) {
+                    $entry['payload'] = $row['payload'];
+                }
+                $payLoad[] = $entry;
             }
 
             $count = count($payLoad);
@@ -131,9 +163,130 @@ $flushBatch = function (string $db, string $channelName = '') use (&$batchState,
                 if ($props['db'] !== $db) {
                     continue;
                 }
-                // Filter payload per client relations (if specified)
-                $batchForClient = [];
+
+                $subscriptions = $props['subscriptions'] ?? [];
+                $rawSubscriptions = $props['rawSubscriptions'] ?? [];
                 $allowedRels = $props['rels'] ?? null;
+
+                // --- GraphQL Subscription-based delivery ---
+                if (!empty($subscriptions)) {
+                    foreach ($subscriptions as $sub) {
+                        $subRel = $sub['rel'];
+                        $subOp = $sub['op'];       // 'INSERT', 'UPDATE', or 'DELETE'
+                        $subWhere = $sub['where'];
+                        $subColumns = $sub['columns'];
+                        $subField = $sub['field'];
+                        $subId = $sub['id'];
+
+                        // Check if this batch has data for the subscription's relation and operation
+                        if (!isset($preparedPayload[$db][$subRel])) {
+                            continue;
+                        }
+                        $relData = $preparedPayload[$db][$subRel];
+                        if (empty($relData[$subOp])) {
+                            continue;
+                        }
+
+                        foreach ($relData as $key => $datum) {
+                            if ($key !== $subOp && $key != 'full_data') {
+                                unset($relData[$key]);
+                            }
+                        }
+                        $reduceFullData($relData, $subOp);
+
+                        // Build a mini-batch with only this relation and operation
+                        $miniBatch = [
+                            'type' => 'batch',
+                            'db' => $db,
+                            'batch' => [
+                                $db => [
+                                    $subRel => [
+                                        ...$relData,
+                                    ]
+                                ]
+                            ]
+                        ];
+
+                        // Apply ShapeFilter with subscription's where and columns
+                        $filter = new ShapeFilter();
+                        $miniBatch = $filter->filter($miniBatch, $subWhere, $subColumns);
+
+                        // Extract filtered full_data rows
+                        $rows = $miniBatch['batch'][$db][$subRel]['full_data'] ?? [];
+                        if (empty($rows)) {
+                            continue;
+                        }
+
+                        // Send as GraphQL subscription response
+                        $response = [
+                            'type' => 'subscription',
+                            'id' => $subId,
+                            'data' => [
+                                $subField => $rows,
+                            ],
+                        ];
+
+                        echo "[INFO] Subscription $subId -> {$client->getId()} ($subOp on $subRel, " . count($rows) . " rows)\n";
+                        $client->sendText(json_encode($response));
+                    }
+                    continue; // Subscriptions handled, skip legacy batch for this client
+                }
+
+                // --- Raw Subscription-based delivery ---
+                if (!empty($rawSubscriptions)) {
+                    foreach ($rawSubscriptions as $sub) {
+                        $subRel = $sub['schema'] . '.' . $sub['rel'];
+                        $subOp = $sub['op'];       // 'INSERT', 'UPDATE', or 'DELETE'
+                        $subWhere = $sub['where'];
+                        $subColumns = $sub['columns'];
+                        $subId = $sub['id'];
+
+                        // Check if this batch has data for the subscription's relation and operation
+                        if (!isset($preparedPayload[$db][$subRel])) {
+                            continue;
+                        }
+                        $relData = $preparedPayload[$db][$subRel];
+
+                        if (!empty($subOp)) {
+                            foreach ($relData as $key => $datum) {
+                                if ($key !== $subOp && $key != 'full_data') {
+                                    unset($relData[$key]);
+                                }
+                            }
+                            $reduceFullData($relData, $subOp);
+                        }
+
+                        // Build a batch with only this relation and operation
+                        $batch = [
+                            'id' => $subId,
+                            'type' => 'batch',
+                            'db' => $db,
+                            'batch' => [
+                                $db => [
+                                    $subRel => [
+                                        ...$relData
+                                    ]
+                                ]
+                            ]
+                        ];
+
+                        // Apply ShapeFilter with subscription's where and columns
+                        $filter = new ShapeFilter();
+                        $batch = $filter->filter($batch, $subWhere, $subColumns);
+                        // Extract filtered full_data rows
+                        $rows = $batch['batch'][$db][$subRel]['full_data'] ?? [];
+                        if (empty($rows)) {
+                            continue;
+                        }
+
+                        echo "[INFO] Subscription $subId -> {$client->getId()} ($subOp on $subRel, " . count($rows) . " rows)\n";
+                        $client->sendText(json_encode($batch));
+                    }
+                    continue; // Subscriptions handled, skip legacy batch for this client
+                }
+
+                // --- Legacy batch delivery (clients without subscriptions) ---
+                $batchForClient = [];
                 if (is_array($allowedRels) && !empty($allowedRels) && is_array($preparedPayload)) {
                     foreach ($preparedPayload[$db] as $key => $value) {
                         if (in_array($key, $allowedRels)) {
@@ -142,23 +295,14 @@ $flushBatch = function (string $db, string $channelName = '') use (&$batchState,
                     }
                 }
                 if (empty($batchForClient)) {
-                    // Nothing to send to this client after filtering
                     continue;
                 }
-                echo "[INFO] filtering payload\n";
-
-                $filter = new ShapeFilter();
 
                 $batch = [
                     'type' => 'batch',
                     'db' => $db,
                     'batch' => $batchForClient
                 ];
-
-                //$where = "text = 'test3'";
-                $where = "";
-
-                $batch = $filter->filter($batch, $where);
 
                 echo "[INFO] Sending to: " . $client->getId() . "\n";
                 $client->sendText(json_encode($batch));
