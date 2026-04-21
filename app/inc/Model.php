@@ -572,9 +572,9 @@ class Model
                 // Get type and srid of geometry
                 if ($row["udt_name"] == "geometry") {
                     preg_match("/[A-Z]\w+/", $row["full_type"], $matches);
-                    $arr[$row["column_name"]]["geom_type"] = $matches[0] ?? null;
+                    $arr[$row["column_name"]]["geom_type"] = $matches[0];
                     preg_match("/[0-9]+/", $row["full_type"], $matches);
-                    $arr[$row["column_name"]]["srid"] = $matches[0] ?? null;
+                    $arr[$row["column_name"]]["srid"] = $matches[0];
                 }
             }
             $CachedString->set($arr)->expiresAfter(Globals::$cacheTtl);//in seconds, also accepts Datetime
@@ -616,7 +616,7 @@ class Model
                 break;
             case "PDO" :
                 if (empty($this->getPdoConnection()) || !$this->isPdoConnected()) {
-                    //error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
+                    error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
                     $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port}", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
                     $this->execQuery("set client_encoding='UTF8'");
                 }
@@ -1107,6 +1107,7 @@ class Model
      * @param string $schema
      * @param string $table
      * @return array
+     * @throws PDOException
      */
     public function getColumns(string $schema, string $table): array
     {
@@ -1633,13 +1634,19 @@ class Model
      */
     public function doesRelationExists(string $rel): bool
     {
-        $sql = "SELECT FROM " . $this->doubleQuoteQualifiedName($rel) . " LIMIT 1";
-        try {
-            $this->execQuery($sql);
-            return true;
-        } catch (PDOException) {
-            return false;
-        }
+        $parts = $this->explodeTableName($rel);
+        $schema = $parts['schema'] ? str_replace('.', '', $parts['schema']) : null;
+        $table = $parts['table'];
+        $sql = "SELECT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_class c
+                    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                    WHERE c.relname = :table
+                    AND (:schema::text IS NULL OR n.nspname = :schema)
+                    AND c.relkind IN ('r','v','m','f','p')
+                ) AS exists";
+        $res = $this->prepare($sql);
+        $res->execute(['table' => $table, 'schema' => $schema]);
+        return (bool)$res->fetchColumn();
     }
 
     /**

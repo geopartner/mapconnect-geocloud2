@@ -149,9 +149,15 @@ class GraphQL
             'fields' => fn() => $this->getMutationFields()
         ]);
 
+        $subscriptionType = new ObjectType([
+            'name' => 'Subscription',
+            'fields' => fn() => $this->getSubscriptionFields()
+        ]);
+
         return new Schema([
             'query' => $queryType,
-            'mutation' => $mutationType
+            'mutation' => $mutationType,
+            'subscription' => $subscriptionType,
         ]);
     }
 
@@ -235,6 +241,190 @@ class GraphQL
             ];
         }
         return $fields;
+    }
+
+    private function getSubscriptionFields(): array
+    {
+        $fields = [];
+        $tableModel = new TableModel(table: null, connection: $this->connection);
+        try {
+            $tables = $tableModel->getRecords(false, $this->schema)['data'];
+        } catch (\Throwable) {
+            $tables = [];
+        }
+        $opSuffixes = [
+            'MessageAdded' => 'INSERT',
+            'MessageUpdated' => 'UPDATE',
+            'MessageDeleted' => 'DELETE',
+        ];
+        foreach ($tables as $t) {
+            if (!$t['enableows']) {
+                continue;
+            }
+            $tableName = $t['f_table_name'];
+            $pascalName = self::snakeToPascal($tableName);
+            foreach ($opSuffixes as $suffix => $op) {
+                $fieldName = $pascalName . $suffix;
+                $fields[$fieldName] = [
+                    'type' => Type::listOf($this->getTableType($t['f_table_schema'], $tableName)),
+                    'args' => [
+                        'where' => ['type' => Type::string()],
+                    ],
+                    'resolve' => fn() => null,
+                ];
+            }
+        }
+        return $fields;
+    }
+
+    /**
+     * Parse a GraphQL subscription query and extract table, operation, where, and columns.
+     *
+     * @param string $query The GraphQL subscription query string
+     * @param string $schema The database schema name
+     * @return array{rel: string, op: string, where: string, columns: string, field: string}
+     * @throws GraphQLException
+     */
+    public static function parseSubscription(string $query, string $schema): array
+    {
+        try {
+            $doc = GraphQLParser::parse($query);
+        } catch (\Throwable $e) {
+            throw new GraphQLException('Subscription parse error: ' . $e->getMessage(), 400);
+        }
+
+        $operation = null;
+        foreach ($doc->definitions as $def) {
+            if ($def instanceof OperationDefinitionNode && $def->operation === 'subscription') {
+                $operation = $def;
+                break;
+            }
+        }
+        if (!$operation) {
+            throw new GraphQLException('No subscription operation found', 400);
+        }
+
+        $selections = $operation->selectionSet?->selections ?? [];
+        if (empty($selections)) {
+            throw new GraphQLException('No fields selected in subscription', 400);
+        }
+
+        $opSuffixes = [
+            'MessageAdded' => 'INSERT',
+            'MessageUpdated' => 'UPDATE',
+            'MessageDeleted' => 'DELETE',
+        ];
+
+        $results = [];
+        foreach ($selections as $sel) {
+            if (!$sel instanceof FieldNode) {
+                continue;
+            }
+            $fieldName = $sel->name->value;
+
+            $matchedOp = null;
+            $tablePartPascal = null;
+            foreach ($opSuffixes as $suffix => $op) {
+                if (str_ends_with($fieldName, $suffix)) {
+                    $matchedOp = $op;
+                    $tablePartPascal = substr($fieldName, 0, -strlen($suffix));
+                    break;
+                }
+            }
+            if ($matchedOp === null || $tablePartPascal === null) {
+                throw new GraphQLException("Invalid subscription field: '$fieldName'. Expected format: {Table}MessageAdded|Updated|Deleted", 400);
+            }
+
+            $tableName = self::camelToSnake($tablePartPascal);
+
+            $where = '';
+            foreach ($sel->arguments ?? [] as $arg) {
+                if ($arg->name->value === 'where') {
+                    if ($arg->value instanceof StringValueNode) {
+                        $where = $arg->value->value;
+                    } elseif ($arg->value instanceof ObjectValueNode) {
+                        $whereArray = self::valueFromAstStatic($arg->value);
+                        $noParams = null;
+                        $where = self::buildWhereClause($whereArray, null, $noParams);
+                    }
+                }
+            }
+
+            $columns = [];
+            foreach ($sel->selectionSet?->selections ?? [] as $subSel) {
+                if ($subSel instanceof FieldNode) {
+                    $columns[] = $subSel->name->value;
+                }
+            }
+
+            $results[] = [
+                'rel' => $schema . '.' . $tableName,
+                'op' => $matchedOp,
+                'where' => $where,
+                'columns' => implode(',', $columns),
+                'field' => $fieldName,
+            ];
+        }
+
+        if (empty($results)) {
+            throw new GraphQLException('No valid subscription fields found', 400);
+        }
+
+        return $results;
+    }
+
+    /**
+     * Convert a GraphQL AST ValueNode to a plain PHP value (static version for use in parseSubscription).
+     */
+    private static function valueFromAstStatic(ValueNode $node): mixed
+    {
+        if ($node instanceof StringValueNode) {
+            return $node->value;
+        }
+        if ($node instanceof IntValueNode) {
+            return (int)$node->value;
+        }
+        if ($node instanceof FloatValueNode) {
+            return (float)$node->value;
+        }
+        if ($node instanceof BooleanValueNode) {
+            return (bool)$node->value;
+        }
+        if ($node instanceof NullValueNode) {
+            return null;
+        }
+        if ($node instanceof ListValueNode) {
+            $arr = [];
+            foreach ($node->values as $v) {
+                $arr[] = self::valueFromAstStatic($v);
+            }
+            return $arr;
+        }
+        if ($node instanceof ObjectValueNode) {
+            $obj = [];
+            foreach ($node->fields as $f) {
+                $obj[$f->name->value] = self::valueFromAstStatic($f->value);
+            }
+            return $obj;
+        }
+        return null;
+    }
+
+    /**
+     * Format a value as a literal for ShapeFilter parsing.
+     */
+    private static function filterLiteral(mixed $value): string
+    {
+        if (is_null($value)) {
+            return 'NULL';
+        }
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string)$value;
+        }
+        return "'" . str_replace(["\\", "'"], ["\\\\", "\\'"], (string)$value) . "'";
     }
 
     /**
@@ -1146,51 +1336,59 @@ class GraphQL
     }
 
     /**
-     * Build a recursive WHERE clause for operators and logical AND/OR/NOT.
+     * Non-static wrapper for buildWhereClause (parameterized mode for SQL queries).
      * @throws GraphQLException
      */
     private function buildWhere(array $where, array $metaCols, array &$params, string $conjunction = 'AND'): string
     {
+        return self::buildWhereClause($where, $metaCols, $params, $conjunction);
+    }
+
+    /**
+     * Build a recursive WHERE clause from a JSON-style where array.
+     *
+     * Two modes controlled by $params:
+     *  - Parameterized (for SQL): pass $metaCols and $params array → produces `:p0` placeholders,
+     *    quotes column names, validates columns against $metaCols.
+     *  - Literal (for ShapeFilter): pass $metaCols = null and $params = null → produces inline
+     *    literal values, bare column names, no column validation.
+     *
+     * @throws GraphQLException
+     */
+    private static function buildWhereClause(array $where, ?array $metaCols, ?array &$params, string $conjunction = 'AND'): string
+    {
+        $literal = ($params === null);
+        $opMap = [
+            'eq' => '=', 'gt' => '>', 'lt' => '<',
+            'gte' => '>=', 'lte' => '<=', 'neq' => '!=',
+            'like' => 'LIKE', 'ilike' => 'ILIKE',
+        ];
+
         $clauses = [];
         foreach ($where as $key => $value) {
-            // Logical operators
-            if (strcasecmp($key, 'AND') === 0) {
+            $upper = strtoupper($key);
+
+            // Logical operators: AND, OR, NOT
+            if ($upper === 'AND' || $upper === 'OR') {
                 if (is_array($value)) {
                     $subClauses = [];
                     foreach ($value as $v) {
                         if (is_array($v)) {
-                            $sub = $this->buildWhere($v, $metaCols, $params, 'AND');
+                            $sub = self::buildWhereClause($v, $metaCols, $params);
                             if ($sub !== '') {
                                 $subClauses[] = $sub;
                             }
                         }
                     }
                     if (!empty($subClauses)) {
-                        $clauses[] = '(' . implode(' AND ', $subClauses) . ')';
+                        $clauses[] = '(' . implode(" $upper ", $subClauses) . ')';
                     }
                 }
                 continue;
             }
-            if (strcasecmp($key, 'OR') === 0) {
+            if ($upper === 'NOT') {
                 if (is_array($value)) {
-                    $subClauses = [];
-                    foreach ($value as $v) {
-                        if (is_array($v)) {
-                            $sub = $this->buildWhere($v, $metaCols, $params, 'AND');
-                            if ($sub !== '') {
-                                $subClauses[] = $sub;
-                            }
-                        }
-                    }
-                    if (!empty($subClauses)) {
-                        $clauses[] = '(' . implode(' OR ', $subClauses) . ')';
-                    }
-                }
-                continue;
-            }
-            if (strcasecmp($key, 'NOT') === 0) {
-                if (is_array($value)) {
-                    $sub = $this->buildWhere($value, $metaCols, $params, 'AND');
+                    $sub = self::buildWhereClause($value, $metaCols, $params);
                     if ($sub !== '') {
                         $clauses[] = 'NOT (' . $sub . ')';
                     }
@@ -1198,84 +1396,65 @@ class GraphQL
                 continue;
             }
 
-            // Column names
-            if (!in_array($key, $metaCols, true)) {
+            // Column validation (only in parameterized mode)
+            if ($metaCols !== null && !in_array($key, $metaCols, true)) {
                 throw new GraphQLException("Unknown column '$key'", 400);
             }
 
-            $quotedCol = self::quoteIdent($key);
+            $quotedCol = $literal ? $key : self::quoteIdent($key);
 
-            if (is_array($value) && !empty($value) && $this->isOperatorArray($value)) {
+            if (is_array($value) && !empty($value) && self::isOperatorArray($value)) {
                 foreach ($value as $op => $opVal) {
-                    $p = 'p' . count($params);
-                    switch (strtolower($op)) {
-                        case 'eq':
-                            $clauses[] = "$quotedCol = :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'gt':
-                            $clauses[] = "$quotedCol > :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'lt':
-                            $clauses[] = "$quotedCol < :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'gte':
-                            $clauses[] = "$quotedCol >= :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'lte':
-                            $clauses[] = "$quotedCol <= :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'neq':
-                            $clauses[] = "$quotedCol != :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        case 'in':
-                            if (!is_array($opVal)) {
-                                throw new GraphQLException("Operator 'in' requires an array value", 400);
+                    $opLower = strtolower($op);
+
+                    if ($opLower === 'in') {
+                        if (!is_array($opVal)) {
+                            throw new GraphQLException("Operator 'in' requires an array value", 400);
+                        }
+                        if ($literal) {
+                            $items = array_map(fn($v) => self::filterLiteral($v), $opVal);
+                            $clauses[] = "$quotedCol IN (" . implode(', ', $items) . ")";
+                        } elseif (empty($opVal)) {
+                            $clauses[] = '1=0';
+                        } else {
+                            $p = 'p' . count($params);
+                            $inParams = [];
+                            foreach ($opVal as $i => $v) {
+                                $ip = $p . '_' . $i;
+                                $inParams[] = ":$ip";
+                                $params[$ip] = $v;
                             }
-                            if (empty($opVal)) {
-                                $clauses[] = '1=0';
-                            } else {
-                                $inParams = [];
-                                foreach ($opVal as $i => $v) {
-                                    $ip = $p . '_' . $i;
-                                    $inParams[] = ":$ip";
-                                    $params[$ip] = $v;
-                                }
-                                $clauses[] = "$quotedCol IN (" . implode(', ', $inParams) . ")";
-                            }
-                            break;
-                        case 'like':
-                            $clauses[] = "$quotedCol LIKE :$p";
+                            $clauses[] = "$quotedCol IN (" . implode(', ', $inParams) . ")";
+                        }
+                    } elseif (isset($opMap[$opLower])) {
+                        $sqlOp = $opMap[$opLower];
+                        if ($literal) {
+                            $clauses[] = "$quotedCol $sqlOp " . self::filterLiteral($opVal);
+                        } else {
+                            $p = 'p' . count($params);
+                            $clauses[] = "$quotedCol $sqlOp :$p";
                             $params[$p] = $opVal;
-                            break;
-                        case 'ilike':
-                            $clauses[] = "$quotedCol ILIKE :$p";
-                            $params[$p] = $opVal;
-                            break;
-                        default:
-                            throw new GraphQLException("Unknown operator '$op' for column '$key'", 400);
+                        }
+                    } else {
+                        throw new GraphQLException("Unknown operator '$op' for column '$key'", 400);
                     }
                 }
             } else {
-                // Backward compatibility: simple equality
-                $p = 'p' . count($params);
-                $clauses[] = "$quotedCol = :$p";
-                $params[$p] = $value;
+                // Simple equality
+                if ($literal) {
+                    $clauses[] = "$quotedCol = " . self::filterLiteral($value);
+                } else {
+                    $p = 'p' . count($params);
+                    $clauses[] = "$quotedCol = :$p";
+                    $params[$p] = $value;
+                }
             }
         }
 
         return !empty($clauses) ? implode(" $conjunction ", $clauses) : '';
     }
 
-    /**
-     * Check if an array contains any of the supported operators.
-     */
-    private function isOperatorArray(array $arr): bool
+    private static function isOperatorArray(array $arr): bool
     {
         $operators = ['eq', 'gt', 'lt', 'gte', 'lte', 'neq', 'in', 'like', 'ilike'];
         return array_any($arr, fn($v, $k) => is_string($k) && in_array(strtolower($k), $operators, true));

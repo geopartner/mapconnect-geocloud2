@@ -22,7 +22,9 @@ use app\event\tasks\RunGraphQLTask;
 use app\event\tasks\RunQueryTask;
 use app\event\tasks\RunRpcTask;
 use app\event\tasks\ValidateTokenTask;
+use app\exceptions\GraphQLException;
 use app\inc\Connection;
+use app\inc\GraphQL;
 use SplObjectStorage;
 use Throwable;
 use function Amp\Parallel\Worker\workerPool;
@@ -47,6 +49,7 @@ class WsBroadcast implements WebsocketClientHandler
         $query = $request->getUri()->getQuery();
         parse_str($query, $params);
         $errorMsg = null;
+        $connection = null;
 
         if (isset($params['token'])) {
             $token = $params['token'];
@@ -58,7 +61,7 @@ class WsBroadcast implements WebsocketClientHandler
                 // Connection to the database
                 $connection = new Connection(database: $parsed["database"]);
                 if (!$parsed['superUser']) {
-                    foreach (explode(',', $params['rel']) as $rel) {
+                    foreach (explode(',', $params['rels']) as $rel) {
                         $task = new AuthTask($parsed, $rel, $connection);
                         if (!$this->workerPool->getWorker()->submit($task)->await()) {
                             $errorMsg = [
@@ -69,7 +72,6 @@ class WsBroadcast implements WebsocketClientHandler
                             goto end;
                         }
                     }
-
                 }
                 $this->gateway->addClient($client);
                 $db = $parsed['database'];
@@ -79,7 +81,10 @@ class WsBroadcast implements WebsocketClientHandler
                     'user' => $parsed['uid'],
                     'superUser' => $parsed['superUser'],
                     'userGroup' => $parsed['userGroup'] ?? null,
-                    'rels' => !empty($params['rel']) ? explode(',', $params['rel']) : null,
+                    'rels' => !empty($params['rels']) ? explode(',', $params['rels']) : null,
+                    'subscriptions' => [],
+                    'rawSubscriptions' => [],
+                    'parsed' => $parsed,
                 ]);
                 echo "[INFO] Client {$client->getId()} connected on $db\n";;
             } catch (Throwable $e) {
@@ -124,22 +129,32 @@ class WsBroadcast implements WebsocketClientHandler
                     $parsed = [$parsed];
                 }
                 $r = null;
+
                 if (isset($parsed[0]['q'])) {
                     $r = $this->sql($parsed, $props);
                 }
+
                 if (isset($parsed[0]['jsonrpc'])) {
                     $r = $this->rpc($parsed, $props);
                 }
 
-                if (isset($parsed[0]['test'])) {
-                    $r = $this->gql($parsed, $props);
+                // GraphQL
+                if (isset($parsed[0]['type']) && $parsed[0]['type'] === 'subscribe') {
+                    try {
+                        GraphQL::parseSubscription($parsed[0]['query'], $parsed[0]['schema']);
+                        $this->gqlSubscribe($client, $parsed[0], $connection);
+                        continue;
+                    } catch (Throwable) {
+                        $r = $this->gql($parsed, $props, $parsed[0]['schema']);
+                    }
                 }
 
-                if (isset($parsed[0]['rel'])) {
-                    $data = $this->clientProperties[$client];
-                    $data['rels'] = [$parsed[0]['rel']];
-                    $this->clientProperties[$client] = $data;
+                // Raw
+                if (isset($parsed[0]['type']) && $parsed[0]['type'] === 'subscription') {
+                    $this->rawSubscribe($client, $parsed[0], $connection);
+                    continue;
                 }
+
                 if ($r) {
                     $result = array_values(array_filter($r->await()));
                     if (count($result) == 1) {
@@ -154,6 +169,121 @@ class WsBroadcast implements WebsocketClientHandler
             }
         }
         $this->clientProperties->detach($client);
+    }
+
+    /**
+     * Register a GraphQL subscription for a client.
+     *
+     * Expected message format:
+     * {
+     *   "type": "subscribe",
+     *   "id": "sub1",
+     *   "schema": "my_schema",
+     *   "query": "subscription { MyTableMessageAdded(where: \"col = 'val'\") { id name } }"
+     * }
+     * @throws WebsocketClosedException
+     */
+    private function gqlSubscribe(WebsocketClient $client, array $msg, Connection $connection): void
+    {
+        $subId = $msg['id'] ?? null;
+        $schema = $msg['schema'] ?? null;
+        $query = $msg['query'] ?? null;
+
+        if (!$subId || !$schema || !$query) {
+            $this->sendToClient($client, json_encode([
+                'type' => 'error',
+                'id' => $subId,
+                'error' => 'INVALID_SUBSCRIPTION',
+                'message' => 'Missing required fields: id, schema, query',
+            ]));
+            return;
+        }
+
+        try {
+            $parsed = GraphQL::parseSubscription($query, $schema);
+        } catch (GraphQLException $e) {
+            $this->sendToClient($client, json_encode([
+                'type' => 'error',
+                'id' => $subId,
+                'error' => 'SUBSCRIPTION_PARSE_ERROR',
+                'message' => $e->getMessage(),
+            ]));
+            return;
+        }
+
+        $props = $this->clientProperties[$client];
+
+        foreach ($parsed as $sub) {
+            $sub['id'] = $subId;
+            $props['subscriptions'][] = $sub;
+            $task = new AuthTask($props['parsed'], $sub['rel'], $connection);
+            if (!$this->workerPool->getWorker()->submit($task)->await()) {
+                $errorMsg = [
+                    'type' => 'error',
+                    'id' => $subId,
+                    'error' => 'NOT_ALLOWED',
+                    'message' => "Not allowed to access this resource: {$sub['rel']}",
+                ];
+                $this->sendToClient($client, json_encode($errorMsg));
+                return;
+            }
+        }
+
+        $rels = $props['rels'] ?? [];
+        foreach ($parsed as $sub) {
+            if (!in_array($sub['rel'], $rels, true)) {
+                $rels[] = $sub['rel'];
+            }
+        }
+
+        $this->clientProperties[$client] = $props;
+        echo "[INFO] Client {$client->getId()} subscribed: $subId on $schema\n";
+
+        $this->sendToClient($client, json_encode([
+            'type' => 'subscribe_ack',
+            'id' => $subId,
+        ]));
+    }
+
+    /**
+     * Register a GraphQL subscription for a client.
+     *
+     * Expected message format:
+     * {
+     *   "type": "subscription",
+     *   "schema": "my_schema",
+     *   "rel": "my_table",
+     *   "where": "user = 'joe'",
+     *   "columns": "user,address,phone",
+     *   "op": "UPDATE"
+     * }
+     * @throws WebsocketClosedException
+     */
+    private function rawSubscribe(WebsocketClient $client, array $msg, Connection $connection): void {
+        $sub['id'] =  $msg['id'];
+        $sub['schema'] =  $msg['schema'];
+        $sub['rel'] =  $msg['rel'];
+        $sub['where'] =  $msg['where'] ?? '';
+        $sub['columns'] =  $msg['columns'] ?? '';
+        $sub['op'] =  $msg['op'] ?? null;
+        $props = $this->clientProperties[$client];
+        $task = new AuthTask($props['parsed'], $sub['schema'] . '.' . $sub['rel'], $connection);
+        if (!$this->workerPool->getWorker()->submit($task)->await()) {
+            $errorMsg = [
+                'type' => 'error',
+                'id' => $msg['id'],
+                'error' => 'NOT_ALLOWED',
+                'message' => "Not allowed to access this resource: {$sub['rel']}",
+            ];
+            $this->sendToClient($client, json_encode($errorMsg));
+            return;
+        }
+        $props['rawSubscriptions'][] =$sub;
+        $this->clientProperties[$client] = $props;
+        $this->sendToClient($client, json_encode([
+            'type' => 'subscription_ack',
+            'id' => $msg['id'],
+        ]));
     }
 
     public function sendToAll(string $text): void
@@ -182,9 +312,9 @@ class WsBroadcast implements WebsocketClientHandler
         return $this->workerPool->getWorker()->submit($task);
     }
 
-    private function gql(array $query, string $schema, ?array $props): Execution
+    private function gql(array $query, ?array $props, string $schema): Execution
     {
-        $task = new RunGraphQLTask($query, $schema, $props);
+        $task = new RunGraphQLTask($query, $props, $schema);
         return $this->workerPool->getWorker()->submit($task);
     }
 

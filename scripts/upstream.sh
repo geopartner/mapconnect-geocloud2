@@ -8,7 +8,7 @@ UPSTREAM_REPO="https://github.com/mapcentia/geocloud2.git"
 OLD_TAG="${1:-}"
 NEW_TAG="${2:-}"
 OUTPUT_DIR="upstream-changes"
-TEMP_UPSTREAM="/tmp/vidi-upstream"
+TEMP_UPSTREAM="/tmp/geocloud2-upstream"
 
 if [ -z "$OLD_TAG" ] || [ -z "$NEW_TAG" ]; then
     echo "Usage: $0 <old-tag> <new-tag>"

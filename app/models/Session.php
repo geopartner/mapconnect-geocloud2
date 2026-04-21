@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2025 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -17,6 +16,7 @@ use app\inc\Jwt;
 use app\inc\Model;
 use app\inc\ClaimAcl;
 use app\inc\Util;
+use app\models\Geofence as GeofenceModel;
 use app\models\User as UserModel;
 use Exception;
 use Firebase\JWT\JWK;
@@ -26,6 +26,9 @@ use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use Psr\Cache\InvalidArgumentException;
 use stdClass;
 
+const USER_DATABASE = 'mapcentia';
+
+
 /**
  * Class Session
  * @package app\models
@@ -34,7 +37,7 @@ class Session extends Model
 {
     function __construct()
     {
-        parent::__construct(new Connection(database: 'mapcentia'));
+        parent::__construct(new Connection(database: USER_DATABASE));
     }
 
     /**
@@ -187,6 +190,7 @@ class Session extends Model
     {
         \app\inc\Session::start();
         $openIdConfig = App::$param['openIdConfig'] ?? null;
+        $conn = new Connection(database: $parentDb);
 
         if ($openIdConfig) {
 
@@ -282,7 +286,7 @@ class Session extends Model
             }
 
             // Set privileges and group for sub-user
-            // Only set if there is a claim match. Otherwise the sub-user is not changed
+            // Only set if there is a claim match. Otherwise, the sub-user is not changed
             if (!$superuser) {
                 if (!$acl = @file_get_contents(App::$param["path"] . "/app/conf/claim_acl.json")) {
                     error_log("Unable to read claim_acl.json");
@@ -294,6 +298,7 @@ class Session extends Model
                     $claimAcl = new ClaimAcl($acl);
                     $grants = $claimAcl->allTablePermissions($payload);
                     $membershipsKeys = $claimAcl->allMembershipKeys($payload);
+                    $rules = $claimAcl->allRules($payload);
                     if ($membershipsKeys) {
                         $memberships = [];
                         foreach ($membershipsKeys as $key) {
@@ -306,7 +311,6 @@ class Session extends Model
                     }
                     // Set grants
                     if (is_array($grants)) {
-                        $conn = new Connection(database: $parentDb);
                         $layer = new Layer(connection: $conn);
                         $table = new Table(table: "settings.geometry_columns_join", connection: $conn);
                         $table->connect();
@@ -353,6 +357,15 @@ class Session extends Model
                             $row['usergroup'] = $memberships[0]; // TODO
                         }
                         $user->commit();
+                    }
+
+                    // Set rules
+                    if (is_array($rules)) {
+                        $geofence = new GeofenceModel(connection: $conn);
+                        $geofence->begin();
+                        foreach ($rules as $rule) {
+//                            $geofence->create($rule);
+                        }
                     }
                 }
             }
@@ -405,7 +418,7 @@ class Session extends Model
      */
     private static function setSessionVars(array $row, ?string $schema): void
     {
-        $_SESSION['zone'] = $row['zone'] ?? null;
+        $_SESSION['zone'] = $row['zone'];
         $_SESSION['auth'] = true;
         $_SESSION['screen_name'] = $row['screenname'];
         $_SESSION['parentdb'] = $row['parentdb'] ?: $row['screenname'];
@@ -413,7 +426,7 @@ class Session extends Model
         $_SESSION["properties"] = !empty($row["properties"]) ? json_decode($row["properties"]) : null;
         $_SESSION['email'] = $row['email'];
         $_SESSION['usergroup'] = $row['usergroup'] ?: null;
-        $_SESSION['created'] = !empty($row['created']) ? strtotime($row['created']) : null;
+        $_SESSION['created'] = strtotime($row['created']);
         $_SESSION['postgisschema'] = $schema;
     }
 
