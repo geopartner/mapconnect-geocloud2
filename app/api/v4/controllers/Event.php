@@ -14,6 +14,7 @@ use app\api\v4\AcceptableContentTypes;
 use app\api\v4\AcceptableMethods;
 use app\api\v4\ApiInterface;
 use app\api\v4\Controller;
+use app\api\v4\Responses\GetResponse;
 use app\api\v4\Responses\NoContentResponse;
 use app\api\v4\Responses\Response;
 use app\api\v4\Scope;
@@ -82,9 +83,12 @@ class Event extends AbstractApi
     #[Override]
     public function get_index(): Response
     {
-
+        return new GetResponse(["enabled"=> false]);
     }
 
+    /**
+     * @throws GC2Exception
+     */
     #[OA\Patch(path: '/api/v4/schemas/{schema}/tables/{table}/events', operationId: 'postEvents', description: "Install event trigger.", tags: ['Events'])]
     #[OA\Parameter(name: 'schema', description: 'Schema name', in: 'path', required: true, example: 'my_schema')]
     #[OA\Parameter(name: 'table', description: 'Table name', in: 'path', required: true, example: 'my_table')]

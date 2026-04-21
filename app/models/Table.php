@@ -304,7 +304,12 @@ class Table extends Model
         while ($row = $this->fetchRow($result)) {
             $privileges = !empty($row["privileges"]) ? json_decode($row["privileges"]) : null;
             $arr = [];
-            $prop = !empty($_SESSION['usergroup']) ? $_SESSION['usergroup'] : $_SESSION['screen_name'];
+            if (isset($_SESSION)) {
+                $prop = !empty($_SESSION['usergroup']) ? $_SESSION['usergroup'] : $_SESSION['screen_name'];
+            } else {
+                $prop = null;
+            }
+
             if (empty($_SESSION["subuser"]) || ($prop == $this->postgisschema)
                 || (!empty($privileges->$prop) && $privileges->$prop != "none")) {
                 $relType = "t"; // Default
@@ -700,19 +705,16 @@ class Table extends Model
                     $arr = $this->array_push_assoc($arr, "template", !empty($fieldconfArr[$key]->template) ? $fieldconfArr[$key]->template : null);
                     $arr = $this->array_push_assoc($arr, "properties", !empty($fieldconfArr[$key]->properties) ? $fieldconfArr[$key]->properties : null);
                     if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
-                        $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable'] ?? false));
+                        $arr = $this->array_push_assoc($arr, "is_nullable", !empty($value['is_nullable']));
                     } else {
                         $arr = $this->array_push_assoc($arr, "is_nullable", !isset($fieldconfArr[$key]->is_nullable) ? true : $fieldconfArr[$key]->is_nullable);;
                     }
                     $arr = $this->array_push_assoc($arr, "ignore", !empty($fieldconfArr[$key]->ignore) && $fieldconfArr[$key]->ignore);
                     $arr = $this->array_push_assoc($arr, "desc", $this->getColumnComment($key) ?: (!empty($fieldconfArr[$key]->desc) ? $fieldconfArr[$key]->desc : ""));
-                    if (($value['typeObj']['type'] ?? null) == "decimal") {
-                        $precision = $value['typeObj']['precision'] ?? 10;
-                        $scale = $value['typeObj']['scale'] ?? 3;
-                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ($precision $scale)");
+                    if ($value['typeObj']['type'] == "decimal") {
+                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ({$value['typeObj']['precision']} {$value['typeObj']['scale']})");
                     } else {
-                        $type = $value['typeObj']['type'] ?? 'string';
-                        $arr = $this->array_push_assoc($arr, "type", $type);
+                        $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']}");
                     }
                     $response['data'][] = $arr;
                 }
@@ -738,7 +740,7 @@ class Table extends Model
         $this->setType();
         $fieldconfArr = $this->geometryColumns["fieldconf"] === null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($fieldconfArr as $key => $value) {
-            if (!isset($this->metaData[$key]) || !$this->metaData[$key]) {
+            if (!$this->metaData[$key]) {
                 unset($fieldconfArr[$key]);
             }
         }
