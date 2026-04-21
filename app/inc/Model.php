@@ -616,7 +616,8 @@ class Model
                 break;
             case "PDO" :
                 if (empty($this->getPdoConnection()) || !$this->isPdoConnected()) {
-                    error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
+                    // Quiet down on nonsense errors
+                    //error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
                     $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port}", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
                     $this->execQuery("set client_encoding='UTF8'");
                 }
