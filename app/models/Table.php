@@ -542,6 +542,8 @@ class Table extends Model
                         }
                     } if ($key == "fieldconf") {
                         $value = $value ?: "null";
+
+                        // convert to array to allow for patching
                         if (gettype($value) == "string") {
                             $value = json_decode($value, true);
                         }
@@ -554,8 +556,14 @@ class Table extends Model
                                 }
                                 $rec[$fKey] = array_merge($rec[$fKey] ?? [],$fValue);
                             }
-                            $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
+                            $value = $rec;
                         }
+
+                        // Make sure we insert text back into the database
+                        if (gettype($value) == "array") {
+                            $value = json_encode($value, JSON_UNESCAPED_UNICODE);
+                        }
+
                     } else {
                         if (is_object($value) || is_array($value)) {
                             $value = json_encode($value, JSON_UNESCAPED_UNICODE);
