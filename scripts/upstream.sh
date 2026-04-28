@@ -40,7 +40,7 @@ fi
 echo ""
 echo "📊 Changed Files Summary:"
 echo "========================"
-git diff "$OLD_TAG" "$NEW_TAG" --stat
+git --no-pager diff "$OLD_TAG" "$NEW_TAG" --stat
 echo ""
 
 # Export changed files
