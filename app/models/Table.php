@@ -542,8 +542,6 @@ class Table extends Model
                         }
                     } if ($key == "fieldconf") {
                         $value = $value ?: "null";
-
-                        // convert to array to allow for patching
                         if (gettype($value) == "string") {
                             $value = json_decode($value, true);
                         }
@@ -556,14 +554,8 @@ class Table extends Model
                                 }
                                 $rec[$fKey] = array_merge($rec[$fKey] ?? [],$fValue);
                             }
-                            $value = $rec;
+                            $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
-
-                        // Make sure we insert text back into the database
-                        if (gettype($value) == "array") {
-                            $value = json_encode($value, JSON_UNESCAPED_UNICODE);
-                        }
-
                     } else {
                         if (is_object($value) || is_array($value)) {
                             $value = json_encode($value, JSON_UNESCAPED_UNICODE);
@@ -608,7 +600,7 @@ class Table extends Model
         $fieldsForStore = [];
         $columnsForGrid = [];
         $type = "";
-        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : [];
+        $fieldconfArr = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : null;
         foreach ($fieldconfArr as $key => $value) {
             if ($value->properties == "*") {
                 $table = new Table($this->table, connection: $this->connection);;
@@ -776,26 +768,7 @@ class Table extends Model
         $fieldconfArr = $this->geometryColumns["fieldconf"] == null ? [] : (array)json_decode($this->geometryColumns["fieldconf"]);
         foreach ($data as $value) {
             $safeColumn = $value->column;
-            if (($this->metaData[$value->id]["is_nullable"] ?? null) != $value->is_nullable && !$onlyRename) {
-                $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER \"$value->column\" " . ($value->is_nullable ? "DROP" : "SET") . " NOT NULL";
-                $res = $this->prepare($sql);
-                try {
-                    $res->execute();
-                    $response['success'] = true;
-                    return $response;
-                } catch (PDOException $e) {
-                    if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
-                        throw $e;
-                    }
-                }
-            }
-            if (($this->metaData[$value->id]["desc"] ?? null) !== $value->desc && !$onlyRename) {
-                if ($value->desc === "") {
-                    $value->desc = null;
-                }
-                $this->setColumnComment($value->desc, $value->id);
 
-            }
             // Case of renaming column
             if ($value->id != $value->column && ($value->column) && ($value->id)) {
                 if ($safeColumn == "state") {
@@ -817,6 +790,25 @@ class Table extends Model
             } else {
                 $response['message'] = "Updated";
                 $response['name'] = $value->id;
+            }
+            if ($this->metaData[$value->id]["is_nullable"] != $value->is_nullable && !$onlyRename) {
+                $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER \"$value->column\" " . ($value->is_nullable ? "DROP" : "SET") . " NOT NULL";
+                $res = $this->prepare($sql);
+                try {
+                    $this->execute($res);
+                    $response['success'] = true;
+                } catch (PDOException $e) {
+                    if ($this->relType == "TABLE" || $this->relType == "MATVIEW") {
+                        throw $e;
+                    }
+                }
+            }
+            if ($this->metaData[$value->id]["desc"] !== $value->desc && !$onlyRename) {
+                if ($value->desc === "") {
+                    $value->desc = null;
+                }
+                $this->setColumnComment($value->desc, $value->id);
+
             }
             if (property_exists($value, 'comment')) {
                 $this->setColumnComment($value->comment, $safeColumn);
@@ -1568,7 +1560,7 @@ class Table extends Model
         $this->clearCacheOnSchemaChanges();
         $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER COLUMN \"$column\" SET DEFAULT $value";
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
     }
 
     /**
@@ -1579,7 +1571,7 @@ class Table extends Model
         $this->clearCacheOnSchemaChanges();
         $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER COLUMN \"$column\" DROP DEFAULT";
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
 
     }
 
@@ -1588,11 +1580,14 @@ class Table extends Model
      */
     public function changeType(string $column, string $type): void
     {
+        if ($this->relType == 'VIEW') {
+            return;
+        }
         $this->clearCacheOnSchemaChanges();
         $type = $this->matchType($type);
         $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER COLUMN \"$column\" TYPE " . $type . " USING \"$column\"::" . $type;
         $res = $this->prepare($sql);
-        $res->execute();
+        $this->execute($res);
     }
 
     /**
@@ -1665,5 +1660,63 @@ class Table extends Model
     {
         $comments = $this->getColumnComments($this->schema, $this->tableWithOutSchema);
         return $comments[$column];
+    }
+
+    /**
+     * Installs or replaces a database trigger to emit real-time notifications for a specified table.
+     *
+     * @return void
+     * @throws GC2Exception If the table does not have a primary key or has a primary key with multiple columns.
+     */
+    public function installNotifyTrigger(): void
+    {
+        $con = $this->getConstrains($this->schema, $this->tableWithOutSchema, 'p')['data'];
+        if (count($con) == 0) {
+            throw new GC2Exception("Table must have a primary key for emitting real time events", 401);
+        }
+        if (count($con) > 1) {
+            throw new GC2Exception("Table has primary key with multiple columns", 401);
+        }
+        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"$this->schema\".\"$this->tableWithOutSchema\"";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+        $sql = "CREATE TRIGGER _gc2_notify_transaction_trigger AFTER INSERT OR UPDATE OR DELETE ON \"$this->schema\".\"$this->tableWithOutSchema\" FOR EACH ROW EXECUTE PROCEDURE _gc2_notify_transaction('{$con[0]['column_name']}', '$this->schema','$this->tableWithOutSchema', 'snapshot')";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+    }
+
+    /**
+     * Removes a notification trigger from the specified table in a schema.
+     *
+     * @return void
+     */
+    public function removeNotifyTrigger(): void
+    {
+        $sql = "DROP TRIGGER IF EXISTS _gc2_notify_transaction_trigger ON \"$this->schema\".\"$this->tableWithOutSchema\"";
+        $res = $this->prepare($sql);
+        $this->execute($res);
+    }
+
+    /**
+     * Checks if the notification trigger is installed on the specified table.
+     *
+     * @return bool True if the trigger is installed, false otherwise.
+     */
+    public function isNotifyTriggerInstalled(): bool
+    {
+        $sql = "SELECT count(*) AS count
+                FROM pg_trigger t
+                JOIN pg_class c ON t.tgrelid = c.oid
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE n.nspname = :schema
+                AND c.relname = :table
+                AND t.tgname = '_gc2_notify_transaction_trigger'";
+        $res = $this->prepare($sql);
+        $this->execute($res, [
+            'schema' => $this->schema,
+            'table' => $this->tableWithOutSchema
+        ]);
+        $row = $this->fetchRow($res, 'assoc');
+        return (int)$row['count'] > 0;
     }
 }

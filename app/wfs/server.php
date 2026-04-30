@@ -334,8 +334,7 @@ if (!isset($HTTP_FORM_VARS["REQUEST"])) {
 
 // Check if layer is enabled
 $isEnabled = false;
-$geometryColumns = $postgisObject->getGeometryColumns($postgisschema . "." . $HTTP_FORM_VARS["TYPENAME"], "*");
-if ($geometryColumns && $geometryColumns["enableows"]) {
+if ($postgisObject->getGeometryColumns($postgisschema . "." . $HTTP_FORM_VARS["TYPENAME"], "*")["enableows"]) {
     $isEnabled = true;
 }
 
@@ -874,8 +873,8 @@ function getXSD(\app\inc\Model $postgisObject)
         $sql = "SELECT * FROM settings.getColumns('f_table_name=''{$table}'' AND f_table_schema=''{$postgisschema}''',
                     'raster_columns.r_table_name=''{$table}'' AND raster_columns.r_table_schema=''{$postgisschema}''')";
         $fieldConfRow = $postgisObject->fetchRow($postgisObject->execQuery($sql));
-        $fieldConf = !empty($fieldConfRow['fieldconf']) ? json_decode($fieldConfRow['fieldconf']) : null;
-        $fieldConfArr = !empty($fieldConfRow['fieldconf']) ? json_decode($fieldConfRow['fieldconf'], true) : [];
+        $fieldConf = json_decode($fieldConfRow['fieldconf']);
+        $fieldConfArr = json_decode($fieldConfRow['fieldconf'], true);
 
         // Start sorting the fields by sort_id
         $arr = array();
@@ -900,7 +899,7 @@ function getXSD(\app\inc\Model $postgisObject)
             $fieldsArr[$table][] = $value[1];
         }
         foreach ($fieldsArr[$table] as $hello) {
-            $atts["nillable"] = (!empty($tableObj->metaData[$hello]) && $tableObj->metaData[$hello]["is_nullable"]) ? "true" : "false";
+            $atts["nillable"] = !empty($tableObj->metaData[$hello]["is_nullable"]) ? "true" : "false";
             $atts["name"] = $hello;
             $properties = !empty($fieldConf->{$atts["name"]}) ? $fieldConf->{$atts["name"]} : null;
             //$atts["label"] = !empty($properties->alias) ? $properties->alias : $atts["name"];
@@ -908,42 +907,38 @@ function getXSD(\app\inc\Model $postgisObject)
                 $atts["name"] = changeFieldName($atts["name"]);
             }
             $atts["maxOccurs"] = "1";
-            if (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "geometry") {
+            if ($tableObj->metaData[$atts["name"]]['type'] == "geometry") {
                 $sql = "SELECT * FROM settings.getColumns('f_table_name=''{$table}'' AND f_table_schema=''{$postgisschema}'' AND f_geometry_column=''{$atts["name"]}''',
                     'raster_columns.r_table_name=''{$table}'' AND raster_columns.r_table_schema=''{$postgisschema}''')";
                 $typeRow = $postgisObject->fetchRow($postgisObject->execQuery($sql));
-                if (!empty($typeRow) && !empty($typeRow['def'])) {
-                    $def = json_decode($typeRow['def']);
-                    if (!empty($def) && !empty($def->geotype) && $def->geotype !== "Default") {
-                        if ($def->geotype == "LINE") {
-                            $def->geotype = "LINESTRING";
-                        }
-                        $typeRow['type'] = "MULTI" . $def->geotype;
+                $def = json_decode($typeRow['def']);
+                if ($def->geotype && $def->geotype !== "Default") {
+                    if ($def->geotype == "LINE") {
+                        $def->geotype = "LINESTRING";
                     }
+                    $typeRow['type'] = "MULTI" . $def->geotype;
                 }
-                if (!empty($typeRow['type'])) {
-                    switch ($typeRow['type']) {
-                        case "POINT":
-                            $atts["type"] = "gml:PointPropertyType";
-                            break;
-                        case "LINESTRING":
-                            $atts["type"] = "gml:LineStringPropertyType";
-                            break;
-                        case "POLYGON":
-                            $atts["type"] = "gml:PolygonPropertyType";
-                            break;
-                        case "MULTIPOINT":
-                            $atts["type"] = "gml:MultiPointPropertyType";
-                            break;
-                        case "MULTILINESTRING":
-                            $atts["type"] = "gml:MultiLineStringPropertyType";
-                            break;
-                        case "MULTIPOLYGON":
-                            $atts["type"] = "gml:MultiPolygonPropertyType";
-                            break;
-                    }
+                switch ($typeRow['type']) {
+                    case "POINT":
+                        $atts["type"] = "gml:PointPropertyType";
+                        break;
+                    case "LINESTRING":
+                        $atts["type"] = "gml:LineStringPropertyType";
+                        break;
+                    case "POLYGON":
+                        $atts["type"] = "gml:PolygonPropertyType";
+                        break;
+                    case "MULTIPOINT":
+                        $atts["type"] = "gml:MultiPointPropertyType";
+                        break;
+                    case "MULTILINESTRING":
+                        $atts["type"] = "gml:MultiLineStringPropertyType";
+                        break;
+                    case "MULTIPOLYGON":
+                        $atts["type"] = "gml:MultiPolygonPropertyType";
+                        break;
                 }
-            } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "bytea") {
+            } elseif ($tableObj->metaData[$atts["name"]]['type'] == "bytea") {
                 if (isset($properties->image) && $properties->image == true) {
                     $atts["type"] = "gc2:imageType";
                     if (isset($fieldConf->$atts["name"]->properties)) {
@@ -957,41 +952,41 @@ function getXSD(\app\inc\Model $postgisObject)
                     }
                 }
             } else {
-                if (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "decimal") {
+                if ($tableObj->metaData[$atts["name"]]['type'] == "decimal") {
                     $atts["type"] = "xsd:decimal";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "double") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "double") {
                     $atts["type"] = "xsd:double";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "text") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "text") {
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "timestamp") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "timestamp") {
                     //$atts["type"] = "xsd:dateTime";
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "timestamptz") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "timestamptz") {
                     //$atts["type"] = "xsd:dateTime";
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "date") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "date") {
                     //$atts["type"] = "xsd:date";
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "time") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "time") {
                     //$atts["type"] = "xsd:time";
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "timetz") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "timetz") {
                     //$atts["type"] = "xsd:time";
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "bytea") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "bytea") {
                     $atts["type"] = "xsd:base64Binary";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "json") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "json") {
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "uuid") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "uuid") {
                     $atts["type"] = "xsd:string";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "int") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "int") {
                     $atts["type"] = "xsd:int";
-                } elseif (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['type'] == "string") {
+                } elseif ($tableObj->metaData[$atts["name"]]['type'] == "string") {
                     unset($atts["type"]);
                 } else {
-                    if (!empty($tableObj->metaData[$atts["name"]]) && $tableObj->metaData[$atts["name"]]['is_array']) {
+                    if ($tableObj->metaData[$atts["name"]]['is_array']) {
                         $atts["type"] = "xsd:string";
-                    } elseif (!empty($tableObj->metaData[$atts["name"]])) {
+                    } else {
                         $atts["type"] = "xsd:" . $tableObj->metaData[$atts["name"]]['type'];
                     }
                 }
@@ -1047,10 +1042,9 @@ function getXSD(\app\inc\Model $postgisObject)
                             echo "<xsd:enumeration value=\"{$prop}\"/>";
                         }
                     } else {
-                        if (!empty($properties->properties)) {
-                            foreach (json_decode($properties->properties) as $prop) {
-                                echo "<xsd:enumeration value=\"{$prop}\"/>";
-                            }
+
+                        foreach (json_decode($properties->properties) as $prop) {
+                            echo "<xsd:enumeration value=\"{$prop}\"/>";
                         }
                     }
                     echo '</xsd:restriction></xsd:simpleType>';
@@ -1128,8 +1122,7 @@ function doQuery(string $queryType)
                 $primeryKey = $tableObj->getPrimeryKey($postgisschema . "." . $table);
                 $geomField = $tableObj->getGeometryColumns($postgisschema . "." . $table, "f_geometry_column");
                 $geomType = $tableObj->getGeometryColumns($postgisschema . "." . $table, "type");
-                $fieldConfValue = $geometryColumnsObj->getValueFromKey("{$postgisschema}.{$table}.{$geomField}", "fieldconf");
-                $fieldConfArr = !empty($fieldConfValue) ? json_decode($fieldConfValue, true) : [];
+                $fieldConfArr = json_decode($geometryColumnsObj->getValueFromKey("{$postgisschema}.{$table}.{$geomField}", "fieldconf"), true);
                 $sql = "SELECT ";
                 $fieldsArr = [];
                 $wheresFlag = false;
@@ -1415,8 +1408,7 @@ function doSelect(string $table, string $sql, string $from, ?string $sql2): void
     while ($innerStatement->execute() && $myrow = $postgisObject->fetchRow($innerStatement, "assoc")) {
         $str = "";
         if ($version != "1.1.0") $str .= writeTag("open", "gml", "featureMember", null, True, True, true);
-        $fid = isset($myrow["fid"]) ? "{$table}.{$myrow["fid"]}" : $table;
-        $str .= writeTag("open", $gmlNameSpace, $gmlFeature[$table], $version == "1.1.0" ? array("gml:id" => $fid) : array("fid" => $fid), True, True, true);
+        $str .= writeTag("open", $gmlNameSpace, $gmlFeature[$table], $version == "1.1.0" ? array("gml:id" => "{$table}.{$myrow["fid"]}") : array("fid" => "{$table}.{$myrow["fid"]}"), True, True, true);
         $numFields = sizeof($myrow);
         $keys = array_keys($myrow);
         for ($i = 0; $i < $numFields; $i++) {
@@ -1424,10 +1416,10 @@ function doSelect(string $table, string $sql, string $from, ?string $sql2): void
             $fieldValue = $myrow[$fieldName];
             if (
                 !empty($fieldName) &&
-                !empty($tableObj->metaData[$fieldName] && $tableObj->metaData[$fieldName]['type'] != "geometry") &&
+                !empty($tableObj->metaData[$fieldName] && isset($tableObj->metaData[$fieldName]) && $tableObj->metaData[$fieldName]['type'] != "geometry") &&
                 $fieldName != "txmin" && $fieldName != "tymin" &&
                 $fieldName != "txmax" && $fieldName != "tymax" &&
-                $fieldName != "tymax" && $fieldName != "oid"
+                $fieldName != "oid"
             ) {
                 if (!empty($gmlUseAltFunctions['altFieldValue'])) {
                     $fieldValue = altFieldValue($fieldName, $fieldValue);
@@ -1474,6 +1466,7 @@ function doSelect(string $table, string $sql, string $from, ?string $sql2): void
         if ($version != "1.1.0") $str .= writeTag("close", "gml", "featureMember", null, True, True, true);
         echo $str;
         flush();
+        ob_flush();
     }
     if ($version == "1.1.0") writeTag("close", "gml", "featureMembers", null, True, True);
     $postgisObject->execQuery("CLOSE curs");
@@ -2444,6 +2437,10 @@ function makeExceptionReport($value, array $attributes = []): void
 
 print("\n<!-- Memory used: " . round(memory_get_peak_usage() / 1024) . " KB -->\n");
 //print($sessionComment);
+// Make sure all is flushed
+echo str_pad("", 4096);
+flush();
+ob_flush();
 
 /**
  * @param string $type

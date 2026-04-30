@@ -62,7 +62,7 @@ class Input
      */
     public static function getAccept(): ?string
     {
-        return $_SERVER['HTTP_ACCEPT'];
+        return $_SERVER['HTTP_ACCEPT'] ?? null;
     }
 
     /**
@@ -103,12 +103,15 @@ class Input
     public static function getJwtToken(): ?string
     {
         if (isset($_SERVER["HTTP_AUTHORIZATION"])) {
-            [$type, $data] = array_pad(explode(" ", $_SERVER["HTTP_AUTHORIZATION"], 2), 2, null);
-            if ($type && strcasecmp($type, "Bearer") == 0) {
+            list($type, $data) = explode(" ", $_SERVER["HTTP_AUTHORIZATION"], 2);
+            if (strcasecmp($type, "Bearer") == 0) {
                 return $data;
+            } else {
+                return null;
             }
+        } else {
+            return null;
         }
-        return null;
     }
 
     /**
