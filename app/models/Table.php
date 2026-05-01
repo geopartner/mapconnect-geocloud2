@@ -531,7 +531,7 @@ class Table extends Model
                         }
                     }
                     // If Meta when update the existing object, so not changed values persist
-                    if ($key == "meta") {
+                    else if ($key == "meta") {
                         $value = $value ?: "null";
                         if (!$raw) {
                             $rec = json_decode($this->getRecordByPri($pKeyValue)["data"]["meta"] ?? '[]', true);
@@ -540,7 +540,7 @@ class Table extends Model
                             }
                             $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
-                    } if ($key == "fieldconf") {
+                    } else if ($key == "fieldconf") {
                         $value = $value ?: "null";
                         if (gettype($value) == "string") {
                             $value = json_decode($value, true);
@@ -564,6 +564,10 @@ class Table extends Model
                             $keySplit = explode(".", $data[0]['_key_']);
                             (new Table($keySplit[0] . '.' . $keySplit[1], connection: $this->connection))->setTableComment($value);
                         }
+                    }
+                    // Final safety check: ensure any remaining arrays/objects are encoded
+                    if (is_array($value) || is_object($value)) {
+                        $value = json_encode($value, JSON_UNESCAPED_UNICODE);
                     }
                 }
                 $pairArr[] = "\"$key\"=:$key";
