@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2023 MapCentia ApS
+ * @copyright  2026      Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -467,6 +468,8 @@ class Model
             }
             $index = $this->getIndexes($_schema, $_table);
             $comments = $this->getColumnComments($_schema, $_table);
+            $fieldconf = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : [];
+
 
             while ($row = $this->fetchRow($res)) {
                 $column = $row["column_name"];
@@ -549,6 +552,7 @@ class Model
                     "max_bytes" => $row["max_bytes"],
                     "reference" => count($references) == 0 ? null : $references,
                     "restriction" => sizeof($foreignValues) > 0 ? $foreignValues : null,
+                    "is_nullable" => $fieldconf[$column]->is_nullable ?? null,
                 );
 
                 // The following is only set on tables
@@ -556,7 +560,6 @@ class Model
                     if ($this->isTableOrView($_schema . '.' . $_table)['data'] == "TABLE") {
                         $tmpArr["is_unique"] = !empty($index["is_unique"][$row["column_name"]]);
                         $tmpArr["is_primary"] = !empty($index["is_primary"][$row["column_name"]]);
-                        $tmpArr["is_nullable"] = !$row['is_nullable'];
                         $tmpArr["default_value"] = $row['default_value'];
                         $tmpArr["identity_generation"] = $row['identity_generation'];
                         $tmpArr["index_method"] = !empty($index["index_method"][$row["column_name"]]) ? $index["index_method"][$row["column_name"]] : null;
@@ -1241,7 +1244,14 @@ class Model
         $this->execute($res);
     }
 
-    public function getTablesFromSchema(string $schema): array
+    /**
+     * Retrieves the names of tables from the specified schema.
+     *
+     * @param string $schema The name of the schema from which to retrieve table names.
+     *
+     * @return array An array of table names belonging to the specified schema.
+     */
+    public function getTableNamesFromSchema(string $schema): array
     {
         $response = [];
         $sql = "SELECT tablename as name FROM pg_tables WHERE schemaname = :schema";
@@ -1253,6 +1263,35 @@ class Model
         return $response;
     }
 
+    /**
+     * Retrieves the names of views and materialized views from the specified schema.
+     *
+     * @param string $schema The name of the schema from which to retrieve the view names.
+     *
+     * @return array An array containing the names of the views and materialized views in the specified schema.
+     */
+    public function getViewNamesFromSchema(string $schema): array
+    {
+        $response = [];
+        $views = $this->getViewsFromSchema($schema);
+        foreach ($views as $v) {
+            $response[] = $v["name"];
+        }
+        return $response;
+    }
+
+    /**
+     * Retrieves views and materialized views from the specified schema.
+     *
+     * @param string $schema The name of the schema from which to fetch views and materialized views.
+     *
+     * @return array An array of views and materialized views, where each item includes:
+     *               - name: The name of the view or materialized view.
+     *               - schema: The schema to which the view or materialized view belongs.
+     *               - owner: The owner of the view or materialized view.
+     *               - ismat: A flag indicating if it is a materialized view ('t') or a regular view ('f').
+     *               - definition: The SQL definition of the view or materialized view.
+     */
     public function getViewsFromSchema(string $schema): array
     {
         $response = [];

@@ -155,7 +155,6 @@ try {
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
-        exit();
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
         setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
@@ -164,7 +163,6 @@ try {
         $dbSplit = explode("@", Input::getPath()->part(2));
         Database::setDb($dbSplit[1] ?? $dbSplit[0]);
         new Wms();
-        exit();
     }
 } catch (OwsException|ServiceException $exception) {
     ob_clean();
@@ -356,8 +354,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/tileseeder/{action}/{uuid}", function () {
@@ -367,8 +365,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/tileseeder/", function () {
@@ -378,8 +376,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/scheduler", function () {
@@ -389,8 +387,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb("gc2scheduler");
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
 
@@ -401,8 +399,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
 
@@ -410,8 +408,8 @@ $handler = static function () use ($routes) {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
 
@@ -419,8 +417,8 @@ $handler = static function () use ($routes) {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
 
@@ -431,8 +429,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
             Route::add("api/v3/foreign", function () {
@@ -442,8 +440,8 @@ $handler = static function () use ($routes) {
                         throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
                     }
                     Database::setDb($jwt["data"]["database"]);
-//                } else {
-//                    echo Response::toJson($jwt);
+                } else {
+                    echo Response::toJson($jwt);
                 }
             });
 
@@ -538,7 +536,16 @@ $handler = static function () use ($routes) {
             }
             Route::miss();
         }
-    } catch (PDOException|GC2Exception $exception) {
+    } catch (PDOException $exception) {
+        $response["success"] = false;
+        $response["message"] = $exception->getMessage();
+        $response["code"] = $exception->getCode();
+        if (getenv('MODE_ENV') == 'dev') {
+            $response["file"] = $exception->getFile();
+            $response["line"] = $exception->getLine();
+            $response["trace"] = $exception->getTraceAsString();
+        }
+    } catch (GC2Exception $exception) {
         $response["success"] = false;
         $response["message"] = $exception->getMessage();
         $response["code"] = $exception->getCode();

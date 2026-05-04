@@ -19,6 +19,7 @@ use Phpfastcache\Exceptions\PhpfastcacheLogicException;
 use Psr\Cache\InvalidArgumentException;
 use stdClass;
 
+
 /**
  * Class Setting
  * @package app\models
@@ -202,11 +203,11 @@ class Setting extends Model
             return $response;
         }
 
-        $obj = isset($arr->extentrestricts) ? (array)$arr->extentrestricts : [];
+        $obj = (array)$arr->extentrestricts;
         $obj[Connection::$param['postgisschema']] = $extentrestrict->extent;
         $arr->extentrestricts = $obj;
 
-        $obj = isset($arr->zoomrestricts) ? (array)$arr->zoomrestricts : [];
+        $obj = (array)$arr->zoomrestricts;
         $obj[Connection::$param['postgisschema']] = $extentrestrict->zoom;
         $arr->zoomrestricts = $obj;
 
@@ -284,7 +285,7 @@ class Setting extends Model
                 if (isset($arr->pw_subuser)) unset($arr->pw_subuser);
             }
             // If user has no key, we generate one.
-            if (!($arr->api_key ?? null)) {
+            if (!$arr->api_key) {
                 $res = $this->updateApiKey();
                 $arr->api_key = $res['key'];
             }
@@ -295,7 +296,7 @@ class Setting extends Model
             $response['data'] = $arr;
 
             // Get userGroups from mapcentia database
-            $users = new Model(new \app\inc\Connection(database: 'mapcentia'));
+            $users = new Model(new \app\inc\Connection(database: Globals::$userDatabase));
             $sQuery = "SELECT * FROM users WHERE parentdb = :parentDb";
             $users->connect();
             $res = $users->prepare($sQuery);
