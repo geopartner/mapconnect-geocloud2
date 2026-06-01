@@ -145,11 +145,7 @@ class Processqgis extends Controller
                     }
 
                     $db = explode("/", $parsed["path"])[2];
-
-                    $split = explode("@", $db);
-                    if (sizeof($split) > 1) {
-                        $db = $split[1];
-                    }
+                    $db = Util::extractDatabaseName($db);
 
                     $fullTable = $schema . "." . $table;
 

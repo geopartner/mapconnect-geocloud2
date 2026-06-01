@@ -36,10 +36,11 @@ class Mapcache extends Controller
         $this->db = Input::getPath()->part(2);
         $this->host = App::$param["mapCache"]["host"];
 
+        $this->db = Util::extractDatabaseName($this->db);
+
         $dbSplit = explode("@", $this->db);
-        if (sizeof($dbSplit) == 2) {
-            $this->subUser = $dbSplit[0];
-            $this->db = $dbSplit[1];
+        if (sizeof($dbSplit) > 2) {
+            $this->subUser = Util::extractUserName($this->db);
         } else {
             $this->subUser = null;
         }

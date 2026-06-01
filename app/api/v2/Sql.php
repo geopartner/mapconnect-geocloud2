@@ -72,14 +72,16 @@ class Sql extends Controller
             $this->api = new \app\models\Sql();
             $this->api->connect();
         }
+        // Use the count of @ to determine if subuser is present
         $dbSplit = explode("@", $r["user"]);
-        if (sizeof($dbSplit) == 2) {
-            $this->subUser = $dbSplit[0];
-            $database = $dbSplit[1];
+        if (sizeof($dbSplit) > 2) {
+            $this->subUser = Util::extractUserName($r["user"]);
         } else {
             $this->subUser = null;
-            $database = $dbSplit[0];
         }
+        
+        $database = Util::extractDatabaseName($r["user"]);
+
         $this->connection = new \app\inc\Connection(database: $database);
 
         // Check if body is JSON
@@ -173,9 +175,10 @@ class Sql extends Controller
 
         // Use bulk if content type is text/plain
         if (Input::getContentType() == Input::TEXT_PLAIN) {
+            // Use the count of @ to determine if subuser is present
             $dbSplit = explode("@", $r["user"]);
-            if (sizeof($dbSplit) == 2) {
-                $this->subUser = $dbSplit[0];
+            if (sizeof($dbSplit) > 2) {
+                $this->subUser = Util::extractUserName($r["user"]);
             } elseif (!empty($_SESSION["subuser"])) {
                 $this->subUser = $_SESSION["screen_name"];
             } else {
