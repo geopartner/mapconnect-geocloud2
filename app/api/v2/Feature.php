@@ -9,6 +9,7 @@
 namespace app\api\v2;
 
 use app\inc\Controller;
+use app\inc\Util;
 use app\inc\Input;
 use app\inc\Route;
 use app\inc\Response;
@@ -350,13 +351,9 @@ class Feature extends Controller
      */
     private function commit(string $xml): array
     {
-        $split = explode("@", $this->user);
-        if (sizeof($split) > 1) {
-            $user = $split[0];
-            $db = $split[1];
-        } else {
-            $user = $db = $this->user;
-        }
+        $user = Util::extractUserName($this->user);
+        $db = Util::extractDatabaseName($this->user);
+
         // Check privileges of user on layer
         $rel = $this->schema . "." . $this->table;
         try {

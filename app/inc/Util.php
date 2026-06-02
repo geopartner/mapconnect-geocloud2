@@ -481,4 +481,36 @@ class Util
         $dash_str .= $password;
         return $dash_str;
     }
+
+    /**
+     * Extract database name from a string that may have prefix(es) before @ symbols.
+     * Takes the part after the last @ symbol, or returns the original string if no @ is found.
+     *
+     * @param string $input The input string (e.g., "user@domain@database" or "database")
+     * @return string The database name (part after the last @)
+     */
+    public static function extractDatabaseName(string $input): string
+    {
+        $parts = explode("@", $input);
+        $databaseName = $parts[count($parts) - 1];
+        return $databaseName;
+    }
+
+    /**
+     * Extract username from a string that may have more than one @ symbol.
+     * The username is the string before the last @ symbol. The username can contain @ symbols.
+     * Find the location of the last @ symbol and return the substring before it. If no @ symbol is found, return the original string.
+     *
+     * @param string $input The input string (e.g., "user@domain@database" or "database")
+     * @return string The username (part before the last @)
+     */
+    public static function extractUserName(string $input): string
+    {
+        $lastAtPos = strrpos($input, '@');
+        if ($lastAtPos === false) {
+            return $input;
+        }
+        $userName = substr($input, 0, $lastAtPos);
+        return $userName;
+    }
 }

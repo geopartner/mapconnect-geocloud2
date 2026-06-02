@@ -10,6 +10,7 @@ namespace app\controllers;
 
 use app\inc\Controller;
 use app\inc\Input;
+use app\inc\Util;
 use app\conf\Connection;
 use app\conf\App;
 use app\models\Database;
@@ -33,12 +34,7 @@ class Tilecache extends Controller
     function __construct()
     {
         parent::__construct();
-
-        $this->db = Input::getPath()->part(2);
-        $dbSplit = explode("@", $this->db);
-        if (sizeof($dbSplit) == 2) {
-            $this->db = $dbSplit[1];
-        }
+        $this->db = Util::extractDatabaseName(Input::getPath()->part(2));
     }
 
     /**
@@ -123,7 +119,7 @@ class Tilecache extends Controller
                 $response['message'] = "Tile cache deleted.";
                 break;
 
-            case "bdb";
+            case "bdb":
                 $dba = dba_open(App::$param['path'] . "app/wms/mapcache/bdb/" . Connection::$param["postgisdb"] . "/" . "feature.polygon/bdb_feature.polygon.db", "c", "db4");
 
                 $key = dba_firstkey($dba);

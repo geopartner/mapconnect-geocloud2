@@ -9,6 +9,7 @@
 namespace app\api\v1;
 
 use app\inc\Controller;
+use app\inc\Util;
 use app\inc\Input;
 use app\inc\Route;
 use app\inc\Session;
@@ -47,10 +48,7 @@ class Meta extends Controller
         // Get the URI params from request
         // /meta/{user}/[query]
         $db = Route::getParam("user");
-        $dbSplit = explode("@", $db);
-        if (sizeof($dbSplit) == 2) {
-            $db = $dbSplit[1];
-        }
+        $db = Util::extractDatabaseName($db);
         return $this->layers->getAll($db, Session::isAuth(), Route::getParam("query"), Input::get("iex"), Input::get("parse"), Input::get("es"), false);
     }
 }

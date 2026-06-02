@@ -152,6 +152,7 @@ try {
         $db = $dbSplit[1] ?? $dbSplit[0];
         // parentUser is superuser
         $parentUser = $user == $db;
+        $db = Util::extractDatabaseName(Input::getPath()->part(2));
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
@@ -161,7 +162,8 @@ try {
             Session::start();
         }
         $dbSplit = explode("@", Input::getPath()->part(2));
-        Database::setDb($dbSplit[1] ?? $dbSplit[0]);
+        $db = Util::extractDatabaseName(Input::getPath()->part(2));
+        Database::setDb($db);
         new Wms();
     }
 } catch (OwsException|ServiceException $exception) {
@@ -241,10 +243,7 @@ $handler = static function () use ($routes) {
                     Session::start();
                 }
                 $db = Input::getPath()->part(4);
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = Util::extractDatabaseName($db);
                 Database::setDb($db);
             });
             Route::add("api/v1/elasticsearch/{action}/{user}/[indices]/[type]", function () {
@@ -270,10 +269,7 @@ $handler = static function () use ($routes) {
                 }
                 $r = func_get_arg(0);
                 $db = $r["user"];
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = Util::extractDatabaseName($db);
                 Database::setDb($db);
             });
             Route::add("api/v2/elasticsearch/{action}/{user}/{schema}/[rel]/[id]", function () {
@@ -284,26 +280,17 @@ $handler = static function () use ($routes) {
             });
             Route::add("api/v2/feature/{user}/{layer}/{srid}/[key]", function () {
                 $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = Util::extractDatabaseName($db);
                 Database::setDb($db);
             });
             Route::add("api/v2/keyvalue/{user}/[key]", function () {
                 $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = Util::extractDatabaseName($db);
                 Database::setDb($db);
             });
             Route::add("api/v2/preparedstatement/{user}", function () {
                 $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = Util::extractDatabaseName($db);
                 Database::setDb($db);
             });
             Route::add("api/v2/qgis/{action}/{user}", function () {
