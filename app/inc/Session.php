@@ -106,11 +106,16 @@ class Session
     }
 
     /**
+     * @param bool $sanitize If true, replaces special characters {}()/\@: with hyphens
      * @return string|null
      */
-    public static function getUser(): ?string
+    public static function getUser(bool $sanitize = false): ?string
     {
-        return $_SESSION['screen_name'] ?? null;
+        $user = $_SESSION['screen_name'] ?? null;
+        if ($sanitize && $user !== null) {
+            $user = preg_replace('/[{}()\\/\\@:]/', '-', $user);
+        }
+        return $user;
     }
 
     /**
