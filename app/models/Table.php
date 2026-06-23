@@ -82,8 +82,8 @@ class Table extends Model
             if ($this->exists) {
                 $this->geometryColumns = $this->getGeometryColumns($this->table, "*");
                 $this->metaData = $this->getMetaData($this->table, $temp, true, null, null, $getEnums, $lookupForeignTables);
-                $this->geomField = $this->geometryColumns["f_geometry_column"];
-                $this->geomType = $this->geometryColumns["type"];
+                $this->geomField = $this->geometryColumns["f_geometry_column"] ?? null;
+                $this->geomType = $this->geometryColumns["type"] ?? null;
                 $this->primaryKey = $this->getPrimeryKey($this->table);
                 $this->relType = $this->isTableOrView(($this->table))['data'];
                 $this->setType();
@@ -439,38 +439,19 @@ class Table extends Model
      * @param string|null $name
      * @return array
      * @throws InvalidArgumentException
+     * @throws GC2Exception
      */
     public function destroy(?string $name = null): array
     {
         $table = $name ?? $this->table;
         $this->clearCacheOnSchemaChanges();
         $response = [];
-        $sql = "DROP TABLE {$this->doubleQuoteQualifiedName($table)} CASCADE;";
-        $res = $this->prepare($sql);
-        try {
-            $this->execute($res);
-        } catch (PDOException) {
-            $sql = "DROP VIEW {$this->doubleQuoteQualifiedName($table)} CASCADE;";
-            $res = $this->prepare($sql);
-            $this->execute($res);
-        }
+        $check = $this->isTableOrView($table);
+        $type = $check["data"];
+        $query = "DROP $type " . $this->doubleQuoteQualifiedName($table) . " CASCADE";
+        $res = $this->prepare($query);
+        $this->execute($res);
         $response['success'] = true;
-        return $response;
-    }
-
-    /**
-     * Get the UUID of layer. Belongs in Layer class
-     * @param string $key
-     * @return array
-     */
-    public function getUuid(string $key): array
-    {
-        $sql = "SELECT * FROM settings.geometry_columns_view WHERE _key_=:key";
-        $res = $this->prepare($sql);
-        $res->execute(array("key" => $key));
-        $row = $this->fetchRow($res);
-        $response['success'] = true;
-        $response['uuid'] = $row["uuid"];
         return $response;
     }
 
@@ -480,8 +461,7 @@ class Table extends Model
      * @param bool $raw
      * @param bool $append
      * @return array<bool|string|int>
-     * @throws PDOException|InvalidArgumentException
-     * @throws GC2Exception
+     * @throws PDOException|InvalidArgumentException|GC2Exception
      */
     public function updateRecord(array $data, string $keyName, bool $raw = false, bool $append = false): array
     {
@@ -531,7 +511,7 @@ class Table extends Model
                         }
                     }
                     // If Meta when update the existing object, so not changed values persist
-                    else if ($key == "meta") {
+                    if ($key == "meta") {
                         $value = $value ?: "null";
                         if (!$raw) {
                             $rec = json_decode($this->getRecordByPri($pKeyValue)["data"]["meta"] ?? '[]', true);
@@ -540,12 +520,21 @@ class Table extends Model
                             }
                             $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
-                    } else if ($key == "fieldconf") {
-                        $value = $value ?: "null";
-                        if (gettype($value) == "string") {
-                            $value = json_decode($value, true);
+                    }
+                    if ($key == "qml") {
+                        if (!empty($value)) {
+                            $qgisFile = new Qgisfile($this->connection);
+                            $qgisUrl = $qgisFile->project(qml: $value, schema: $keySplit[0], rel: $keySplit[1]);
+                            $valueArr['wmssource'] = $qgisUrl[0];
+                            $valueArr['wmsclientepsgs'] = $qgisUrl[1];
                         }
+                    }
+                    if ($key == "fieldconf") {
+                        $value = $value ?: json_encode(null);
                         if (!$raw) {
+                            if (gettype($value) == "string") {
+                                $value = json_decode($value, true);
+                            }
                             $rec = json_decode($this->getRecordByPri($pKeyValue)["data"]["fieldconf"] ?? '[]', true);
                             foreach ($value as $fKey => $fValue) {
                                 if (isset($fValue['queryable'])) {
@@ -562,16 +551,14 @@ class Table extends Model
                         }
                         if ($key == "f_table_abstract") {
                             $keySplit = explode(".", $data[0]['_key_']);
-                            (new Table($keySplit[0] . '.' . $keySplit[1], connection: $this->connection))->setTableComment($value);
+                            new Table($keySplit[0] . '.' . $keySplit[1], connection: $this->connection)->setTableComment($value);
                         }
-                    }
-                    // Final safety check: ensure any remaining arrays/objects are encoded
-                    if (is_array($value) || is_object($value)) {
-                        $value = json_encode($value, JSON_UNESCAPED_UNICODE);
                     }
                 }
                 $pairArr[] = "\"$key\"=:$key";
-                $valueArr[$key] = $value;
+                if (!isset($valueArr[$key])) {
+                    $valueArr[$key] = $value;
+                }
                 $keyArr[] = "\"$key\"";
                 $keyArr2[] = ":$key";
             }
@@ -795,7 +782,10 @@ class Table extends Model
                 $response['message'] = "Updated";
                 $response['name'] = $value->id;
             }
-            if ($this->metaData[$value->id]["is_nullable"] != $value->is_nullable && !$onlyRename) {
+
+            // Set nullable
+            $enablePseudoNotNull = App::$param['enablePseudoNotNull'] ?? false;
+            if (!$enablePseudoNotNull && $this->metaData[$value->id]["is_nullable"] != $value->is_nullable && !$onlyRename) {
                 $sql = "ALTER TABLE " . $this->doubleQuoteQualifiedName($this->table) . " ALTER \"$value->column\" " . ($value->is_nullable ? "DROP" : "SET") . " NOT NULL";
                 $res = $this->prepare($sql);
                 try {
@@ -807,6 +797,7 @@ class Table extends Model
                     }
                 }
             }
+
             if ($this->metaData[$value->id]["desc"] !== $value->desc && !$onlyRename) {
                 if ($value->desc === "") {
                     $value->desc = null;
@@ -937,27 +928,18 @@ class Table extends Model
     public function addVersioning(): array
     {
         $this->clearCacheOnSchemaChanges();
-        $response = [];
-        $this->begin();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_gid SERIAL NOT NULL";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_start_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_end_date TIMESTAMP WITH TIME ZONE DEFAULT NULL";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_uuid UUID NOT NULL DEFAULT gen_random_uuid()";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_user VARCHAR(255)";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $this->commit();
-        $response['success'] = true;
-        $response['message'] = "Table is now versioned";
-        return $response;
+        $this->withTransaction(function () {
+            foreach ([
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_gid SERIAL NOT NULL",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_start_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_end_date TIMESTAMP WITH TIME ZONE DEFAULT NULL",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_uuid UUID NOT NULL DEFAULT uuid_generate_v4()",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_version_user VARCHAR(255)",
+            ] as $sql) {
+                $this->execute($this->prepare($sql));
+            }
+        });
+        return ['success' => true, 'message' => "Table is now versioned"];
     }
 
     /**
@@ -966,27 +948,18 @@ class Table extends Model
     public function removeVersioning(): array
     {
         $this->clearCacheOnSchemaChanges();
-        $response = [];
-        $this->begin();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)}DROP COLUMN gc2_version_gid";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_start_date";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_end_date";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_uuid";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_user";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $this->commit();
-        $response['success'] = true;
-        $response['message'] = "Versioning is removed";
-        return $response;
+        $this->withTransaction(function () {
+            foreach ([
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)}DROP COLUMN gc2_version_gid",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_start_date",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_end_date",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_uuid",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} DROP COLUMN gc2_version_user",
+            ] as $sql) {
+                $this->execute($this->prepare($sql));
+            }
+        });
+        return ['success' => true, 'message' => "Versioning is removed"];
     }
 
     /**
@@ -995,21 +968,16 @@ class Table extends Model
     public function addWorkflow(): array
     {
         $this->clearCacheOnSchemaChanges();
-        $response = [];
-        $this->begin();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_status integer";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_workflow hstore";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $sql = "UPDATE {$this->doubleQuoteQualifiedName($this->table)} SET gc2_status = 3";
-        $res = $this->prepare($sql);
-        $res->execute();
-        $this->commit();
-        $response['success'] = true;
-        $response['message'] = "Table has now workflow";
-        return $response;
+        $this->withTransaction(function () {
+            foreach ([
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_status integer",
+                "ALTER TABLE {$this->doubleQuoteQualifiedName($this->table)} ADD COLUMN gc2_workflow hstore",
+                "UPDATE {$this->doubleQuoteQualifiedName($this->table)} SET gc2_status = 3",
+            ] as $sql) {
+                $this->execute($this->prepare($sql));
+            }
+        });
+        return ['success' => true, 'message' => "Table has now workflow"];
     }
 
     /**

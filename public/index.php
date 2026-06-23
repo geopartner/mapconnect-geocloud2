@@ -152,18 +152,17 @@ try {
         $db = $dbSplit[1] ?? $dbSplit[0];
         // parentUser is superuser
         $parentUser = $user == $db;
-        $db = Util::extractDatabaseName(Input::getPath()->part(2));
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
+        \app\wfs\bootstrap_legacy_wfs($db, $user, $parentUser);
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
         setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
             Session::start();
         }
         $dbSplit = explode("@", Input::getPath()->part(2));
-        $db = Util::extractDatabaseName(Input::getPath()->part(2));
-        Database::setDb($db);
+        Database::setDb($dbSplit[1] ?? $dbSplit[0]);
         new Wms();
     }
 } catch (OwsException|ServiceException $exception) {
@@ -243,7 +242,10 @@ $handler = static function () use ($routes) {
                     Session::start();
                 }
                 $db = Input::getPath()->part(4);
-                $db = Util::extractDatabaseName($db);
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v1/elasticsearch/{action}/{user}/[indices]/[type]", function () {
@@ -269,7 +271,10 @@ $handler = static function () use ($routes) {
                 }
                 $r = func_get_arg(0);
                 $db = $r["user"];
-                $db = Util::extractDatabaseName($db);
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/elasticsearch/{action}/{user}/{schema}/[rel]/[id]", function () {
@@ -280,17 +285,26 @@ $handler = static function () use ($routes) {
             });
             Route::add("api/v2/feature/{user}/{layer}/{srid}/[key]", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/keyvalue/{user}/[key]", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/preparedstatement/{user}", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/qgis/{action}/{user}", function () {
@@ -449,9 +463,14 @@ $handler = static function () use ($routes) {
             }
             // Then go through non-PUBLIC routes
             if (!$Route2->isMatched) {
-                $jwt = Jwt::validate();
+                try {
+                    $jwt = Jwt::validate();
+                } catch (\Throwable $e) {
+                    error_log('JWT-DEBUG validate failed: ' . get_class($e) . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+                    throw $e;
+                }
                 $Route2->jwt = $jwt;
-                $conn = new \app\inc\Connection(user: $jwt["data"]["uid"], database: $jwt["data"]["database"]);
+                $conn = new \app\inc\Connection(user: $jwt["data"]["uid"] ?? null, database: $jwt["data"]["database"] ?? null);
                 foreach ($routes as $c => $r) {
                     if ($r->getScope() != Scope::PUBLIC) {
                         $Route2->add($r->getRoute(), new $c($Route2, $conn));
@@ -550,6 +569,7 @@ $handler = static function () use ($routes) {
         $response["success"] = false;
         $response["message"] = $exception->getMessage();
         $response["file"] = $exception->getFile();
+        $response["code"] = $exception->getCode();
         if (getenv('MODE_ENV') == 'dev') {
             $response["file"] = $exception->getFile();
             $response["line"] = $exception->getLine();
@@ -566,9 +586,27 @@ $handler = static function () use ($routes) {
 if (function_exists('frankenphp_handle_request')) {
     ignore_user_abort(true);
     $maxRequests = (int)($_SERVER['MAX_REQUESTS'] ?? 500);
+    // Default true: clear session-level Postgres state between worker
+    // iterations (temp tables, SET, LISTEN, prepared statements, plans).
+    // Set workerDiscardSessionState to false in App config to disable
+    // — e.g. when running behind PgBouncer in transaction pooling mode
+    // where the pooler issues RESET ALL itself.
+    $discardSessionState = App::$param['workerDiscardSessionState'] ?? true;
     error_log("Starting worker");
     for ($nbRequests = 0; !$maxRequests || $nbRequests < $maxRequests; ++$nbRequests) {
-        $keepRunning = frankenphp_handle_request($handler);
+        try {
+            $keepRunning = frankenphp_handle_request($handler);
+        } finally {
+            // Safety net: roll back any transaction left open on a cached
+            // PDO before the worker reuses the connection on the next
+            // request. Route2 already does this per dispatch, but worker
+            // mode persists Model::$PdoConnections across requests so we
+            // also clean up here in case a non-v4 path opened one.
+            \app\inc\Model::rollbackAllOpenTransactions();
+            if ($discardSessionState) {
+                \app\inc\Model::resetSessionStateAllConnections();
+            }
+        }
         error_log($keepRunning);
         // Call the garbage collector to reduce the chances of it being triggered in the middle of a page generation
         gc_collect_cycles();

@@ -14,6 +14,7 @@ use app\api\v4\Responses\PatchResponse;
 use app\api\v4\Responses\PostResponse;
 use app\api\v4\Responses\RedirectResponse;
 use app\api\v4\Responses\TextResponse;
+use app\conf\App;
 use app\exceptions\GC2Exception;
 use app\inc\Connection;
 use app\inc\Input;
@@ -78,7 +79,8 @@ abstract class AbstractApi implements ApiInterface
         if (!empty($this->schema)) {
             $this->doesSchemaExist();
         }
-        if (!$superUser && !($userName == $this->schema[0] || $this->schema[0] == "public")) {
+        $publicSchemas = App::$param['publicSchemas'] ?? [];
+        if (!$superUser && !($userName == $this->schema[0] || $this->schema[0] == "public" || (in_array($this->schema[0], $publicSchemas, true)) && Input::getMethod() == "get")) {
             throw new GC2Exception("Not authorized", 403, null, "UNAUTHORIZED");
         }
         if ($this->qualifiedName) {
@@ -277,7 +279,7 @@ abstract class AbstractApi implements ApiInterface
         foreach (glob(dirname(__FILE__) . "/processors/*/classes/pre/*.php") as $filename) {
             $class = "app\\api\\v4\\processors\\" . array_reverse(explode("/", $filename))[3] .
                 "\\classes\\pre\\" . explode(".", array_reverse(explode("/", $filename))[0])[0];
-            $preProcessor = new $class($this->route->jwt);
+            $preProcessor = new $class($this->route->jwt, $model->connection);
             $data = $preProcessor->{$method}($model, $data);
         }
         return $data;
@@ -288,7 +290,7 @@ abstract class AbstractApi implements ApiInterface
         foreach (glob(dirname(__FILE__) . "/processors/*/classes/post/*.php") as $filename) {
             $class = "app\\api\\v4\\processors\\" . array_reverse(explode("/", $filename))[3] .
                 "\\classes\\post\\" . explode(".", array_reverse(explode("/", $filename))[0])[0];
-            $postProcessor = new $class($this->route->jwt);
+            $postProcessor = new $class($this->route->jwt, $model->connection);
             $data = $postProcessor->{$method}($model, $data);
         }
         return $data;
@@ -349,7 +351,7 @@ abstract class AbstractApi implements ApiInterface
     {
         $filteredArray = [];
         foreach ($array as $key => $value) {
-            if (!is_string($key) || !str_starts_with($key, '_')) {
+            if ($key !='propeties' || !is_string($key) || !str_starts_with($key, '_')) {
                 $filteredArray[$key] = is_array($value) ? self::removeUnderscoreKeys($value) : $value;
             }
         }
@@ -388,17 +390,17 @@ abstract class AbstractApi implements ApiInterface
     /**
      * @throws GC2Exception
      */
-    protected function postResponse(string $baseUri, array $list): PostResponse
+    protected function postResponse(string $baseUri, array $list, string $postfix = ''): PostResponse
     {
-        return $this->prepareResponse('post', $baseUri, $list);
+        return $this->prepareResponse('post', $baseUri, $list, $postfix);
     }
 
     /**
      * @throws GC2Exception
      */
-    protected function patchResponse(string $baseUri, array $list = []): PatchResponse
+    protected function patchResponse(string $baseUri, array $list = [], string $postfix = ''): PatchResponse
     {
-        return $this->prepareResponse('patch', $baseUri, $list);
+        return $this->prepareResponse('patch', $baseUri, $list, $postfix);
     }
 
     protected function deleteResponse(): NoContentResponse
@@ -426,10 +428,15 @@ abstract class AbstractApi implements ApiInterface
     /**
      * @throws GC2Exception
      */
-    private function prepareResponse(string $method, string $baseUri, array $list = []): PostResponse|PatchResponse
+    private function prepareResponse(string $method, string $baseUri, array $list = [], string $postfix = ''): PostResponse|PatchResponse
     {
-        $location = $baseUri . implode(",", $list);
-        $res = array_map(fn($l) => ['_links' => ['self' => $baseUri . $l]], $list);
+        $location = $baseUri . implode(",", $list) . $postfix;
+        if (count($list) > 0) {
+            $res = array_map(fn($l) => ['_links' => ['self' => $baseUri . $l. $postfix]], $list);
+        }
+        else {
+            $res = ['_links' => ['self' => $baseUri . $postfix]];
+        }
         if ($method == 'patch') {
             return new PatchResponse(data: $res, location: $location);
         } elseif ($method == 'post') {

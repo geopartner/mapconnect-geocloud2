@@ -62,7 +62,6 @@ class Sql
                     )";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN elasticsearch TEXT";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN uuid UUID NOT NULL DEFAULT uuid_generate_v4()";
-        $sqls[] = "ALTER TABLE settings.geometry_columns_join ALTER COLUMN uuid set DEFAULT gen_random_uuid()";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN tags JSON";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN meta JSON";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN wmsclientepsgs TEXT";
@@ -98,7 +97,6 @@ class Sql
                       created   TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT ('now'::TEXT)::TIMESTAMP(0) WITH TIME ZONE,
                       CONSTRAINT name_unique UNIQUE (name)
                     )";
-        $sqls[] = "ALTER TABLE settings.prepared_statements ALTER COLUMN uuid set DEFAULT gen_random_uuid()";
         $sqls[] = "ALTER TABLE settings.qgis_files ADD COLUMN old BOOLEAN DEFAULT FALSE";
         $sqls[] = "CREATE TABLE settings.seed_jobs
                     (
@@ -108,7 +106,6 @@ class Sql
                       host      CHARACTER VARYING(255)    NOT NULL,
                       created   TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT ('now'::TEXT)::TIMESTAMP(0) WITH TIME ZONE
                     )";
-        $sqls[] = "ALTER TABLE settings.seed_jobs ALTER COLUMN uuid set DEFAULT gen_random_uuid()";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN legend_url VARCHAR(255)";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ALTER roles TYPE JSONB USING roles::jsonb";
         $sqls[] = "CREATE TABLE settings.geofence
@@ -216,6 +213,7 @@ class Sql
                         payload JSONB,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                     )";
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN qml TEXT";
         $sqls[] = "DROP VIEW non_postgis_matviews CASCADE";
         $sqls[] = "CREATE VIEW non_postgis_matviews AS
                     SELECT
@@ -272,6 +270,49 @@ class Sql
                       NOT (t.table_schema :: TEXT = 'public' :: TEXT AND t.table_name :: TEXT = 'non_postgis_matviews' :: TEXT) AND
                       NOT t.table_schema :: TEXT = 'pg_catalog' :: TEXT AND NOT t.table_schema :: TEXT = 'information_schema' :: TEXT;
                     ";
+
+        // --- History tracking: settings.key_value ---
+        $sqls[] = "CREATE TABLE IF NOT EXISTS settings.key_value_history (LIKE settings.key_value)";
+        $sqls[] = "ALTER TABLE settings.key_value_history ADD COLUMN IF NOT EXISTS history_id BIGSERIAL";
+        $sqls[] = "ALTER TABLE settings.key_value_history ADD COLUMN IF NOT EXISTS history_operation CHAR(1)";
+        $sqls[] = "ALTER TABLE settings.key_value_history ADD COLUMN IF NOT EXISTS history_db_user TEXT";
+        $sqls[] = "ALTER TABLE settings.key_value_history ADD COLUMN IF NOT EXISTS history_timestamp TIMESTAMPTZ DEFAULT now()";
+        $sqls[] = <<<'SQL'
+CREATE OR REPLACE FUNCTION settings.history_trigger() RETURNS trigger
+LANGUAGE plpgsql AS $FN$
+DECLARE
+    hist_table text := TG_TABLE_NAME || '_history';
+    rec        record;
+    seq        text;
+    payload    jsonb;
+BEGIN
+    rec := CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    seq := pg_get_serial_sequence('settings.' || hist_table, 'history_id');
+    payload := to_jsonb(rec) || jsonb_build_object(
+        'history_id',        nextval(seq),
+        'history_operation', left(TG_OP, 1),
+        'history_db_user',   current_user,
+        'history_timestamp', now()
+    );
+    EXECUTE format(
+        'INSERT INTO settings.%I SELECT (jsonb_populate_record(NULL::settings.%I, $1)).*',
+        hist_table, hist_table
+    ) USING payload;
+    RETURN NULL;
+END;
+$FN$
+SQL;
+        $sqls[] = "DROP TRIGGER IF EXISTS key_value_history_tr ON settings.key_value";
+        $sqls[] = "CREATE TRIGGER key_value_history_tr AFTER INSERT OR UPDATE OR DELETE ON settings.key_value FOR EACH ROW EXECUTE FUNCTION settings.history_trigger()";
+
+        // --- History tracking: settings.geometry_columns_join ---
+        $sqls[] = "CREATE TABLE IF NOT EXISTS settings.geometry_columns_join_history (LIKE settings.geometry_columns_join)";
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join_history ADD COLUMN IF NOT EXISTS history_id BIGSERIAL";
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join_history ADD COLUMN IF NOT EXISTS history_operation CHAR(1)";
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join_history ADD COLUMN IF NOT EXISTS history_db_user TEXT";
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join_history ADD COLUMN IF NOT EXISTS history_timestamp TIMESTAMPTZ DEFAULT now()";
+        $sqls[] = "DROP TRIGGER IF EXISTS geometry_columns_join_history_tr ON settings.geometry_columns_join";
+        $sqls[] = "CREATE TRIGGER geometry_columns_join_history_tr AFTER INSERT OR UPDATE OR DELETE ON settings.geometry_columns_join FOR EACH ROW EXECUTE FUNCTION settings.history_trigger()";
 
         include 'Views1.php';
         return $sqls;

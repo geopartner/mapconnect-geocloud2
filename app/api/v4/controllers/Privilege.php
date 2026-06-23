@@ -20,6 +20,7 @@ use app\inc\Input;
 use app\inc\Route2;
 use app\models\Layer;
 use app\models\Table;
+use Exception;
 use Override;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use Psr\Cache\InvalidArgumentException;
@@ -99,7 +100,7 @@ class Privilege extends AbstractApi
     #[OA\RequestBody(description: 'Privileges.', required: true, content: new OA\JsonContent(oneOf: [new OA\Schema(ref: "#/components/schemas/Privilege"),
         new OA\Schema(type: "array", items: new OA\Items(ref: "#/components/schemas/Privilege"))])
     )]
-    #[OA\Response(response: 204, description: "Privileges updated")]
+    #[OA\Response(response: 303, description: "Privileges updated")]
     #[OA\Response(response: 400, description: 'Bad request')]
     #[OA\Response(response: 404, description: 'Not found')]
     #[AcceptableContentTypes(['application/json'])]
@@ -115,17 +116,17 @@ class Privilege extends AbstractApi
         }
         $table = new Table(table: "settings.geometry_columns_join", connection: $this->connection);
         $table->connect();
-        $table->begin();
-        foreach ($data as $datum) {
-            $obj = new StdClass();
-            $obj->_key_ = $this->qualifiedName[0];
-            $obj->privileges = $datum['privilege'];
-            $obj->subuser = $datum['subuser'];
-            $layer->updatePrivileges($obj, $table);
-        }
-        $table->commit();
-        $baseUri = "/api/v4/schemas/{$this->schema[0]}/tables/{$this->unQualifiedName[0]}/privileges/";
-        return $this->emptyResponse();
+        $table->withTransaction(function () use ($table, $layer, $data) {
+            foreach ($data as $datum) {
+                $obj = new StdClass();
+                $obj->_key_ = $this->qualifiedName[0];
+                $obj->privileges = $datum['privilege'];
+                $obj->subuser = $datum['subuser'];
+                $layer->updatePrivileges($obj, $table);
+            }
+        });
+        $baseUri = "/api/v4/schemas/{$this->schema[0]}/tables/{$this->unQualifiedName[0]}/privileges";
+        return $this->patchResponse($baseUri);
     }
 
     #[Override] public function delete_index(): Response
@@ -142,11 +143,20 @@ class Privilege extends AbstractApi
     {
         $table = $this->route->getParam("table");
         $schema = $this->route->getParam("schema");
+
+        if (count(explode(',', $table)) > 1 || count(explode(',', $schema)) > 1) {
+            throw new GC2Exception(message: "This API can only get/patch privileges for a single table at a time.", code: 400, errorCode: "BAD_REQUEST");
+        }
+
         $body = Input::getBody();
+
+        if (!$this->route->jwt["data"]["superUser"] && $this->route->jwt["data"]["uid"] != $schema) {
+            throw new GC2Exception(message: "Sub-users can only modify privileges for their own schema.", code: 401, errorCode: "FORBIDDEN");
+        }
 
         // Patch and delete on collection is not allowed
         if (empty($table) && in_array(Input::getMethod(), ['patch', 'delete'])) {
-            throw new GC2Exception("", 406);
+            throw new GC2Exception("Patch and delete on a table collection is not allowed", 400);
         }
         // Throw exception if tried with table resource
         if (Input::getMethod() == 'post' && $table) {

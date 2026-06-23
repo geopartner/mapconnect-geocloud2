@@ -9,11 +9,11 @@
 namespace app\api\v2;
 
 use app\inc\Controller;
-use app\inc\Util;
 use app\inc\Input;
 use app\inc\Route;
 use app\inc\Response;
 use app\inc\Session;
+use app\inc\Util;
 use app\libs\GeometryFactory;
 use app\libs\gmlConverter;
 use app\models\Database;
@@ -223,7 +223,7 @@ class Feature extends Controller
                         $value = "<![CDATA[" . $value . "]]>";
                     } elseif (is_array($value)) {
                         // Create PG array
-                        $value =  json_encode($value);
+                        $value = json_encode($value);
                         $value = '{' . substr($value, 1, -1) . '}';
                     }
                     if ($value === false) {
@@ -294,7 +294,7 @@ class Feature extends Controller
                     $value = "<![CDATA[" . $value . "]]>";
                 } elseif (is_array($value)) {
                     // Create PG array
-                    $value =  json_encode($value);
+                    $value = json_encode($value);
                     $value = '{' . substr($value, 1, -1) . '}';
                 }
                 if ($value === false) {
@@ -351,13 +351,11 @@ class Feature extends Controller
      */
     private function commit(string $xml): array
     {
-        $user = Util::extractUserName($this->user);
-        $db = Util::extractDatabaseName($this->user);
-
+        [$user, $db] = Util::extractUserFromSubUserString($this->user);
         // Check privileges of user on layer
         $rel = $this->schema . "." . $this->table;
         try {
-            $response = $this->ApiKeyAuthLayer($rel, true, [$rel], sizeof($split) > 1 ? $user : null, Input::getApiKey());
+            $response = $this->ApiKeyAuthLayer($rel, true, [$rel], $user, Input::getApiKey());
         } catch (PDOException $e) {
             header("HTTP/1.1 401 Unauthorized");
             die($e->getMessage());
@@ -379,9 +377,9 @@ class Feature extends Controller
         if (empty(Input::getCookies()["PHPSESSID"])) {
             Session::start();
             Session::set("auth", true);
-            Session::set("screen_name", $user);
+            Session::set("screen_name", $user ?? $db);
             Session::set("parentdb", $db);
-            Session::set("subuser", sizeof($split) > 1);
+            Session::set("subuser", !empty($user));
             Session::write();
             $id = Session::getId();
         } else {

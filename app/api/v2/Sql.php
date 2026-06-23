@@ -61,27 +61,19 @@ class Sql extends Controller
      * @throws InvalidArgumentException
      * @throws Exception
      */
-    public function get_index($r, $api = null): array
+    public function get_index(): array
     {
         // Get the URI params from request
         // /{user}
-        if ($api !== null) {
-            $this->api = $api;
-        } else {
+        $r = func_get_arg(0);
+        try {
+            $this->api = func_get_arg(1);
+        } catch (Throwable) {
             $srs = is_numeric(Input::get('srs')) ? Input::get('srs') : 3857;
             $this->api = new \app\models\Sql();
             $this->api->connect();
         }
-        // Use the count of @ to determine if subuser is present
-        $dbSplit = explode("@", $r["user"]);
-        if (sizeof($dbSplit) > 2) {
-            $this->subUser = Util::extractUserName($r["user"]);
-        } else {
-            $this->subUser = null;
-        }
-        
-        $database = Util::extractDatabaseName($r["user"]);
-
+        [$this->subUser, $database] = Util::extractUserFromSubUserString($r["user"]);
         $this->connection = new \app\inc\Connection(database: $database);
 
         // Check if body is JSON
@@ -91,13 +83,12 @@ class Sql extends Controller
 
         // If JSON body when set GET input params
         // ======================================
-        if (is_array($json)) {
-            $params = is_array(Input::$params) ? Input::$params : [];
+        if ($json != null) {
 
-            $typeHints = $json["type_hints"] ?? $params["type_hints"] ?? [];
-            $typeFormats = $json["type_formats"] ?? $params["type_formats"] ?? [];
-            $srs = $json["srs"] ?? $params["srs"] ?? $srs ?? null;
-            $outputFormat = $json["format"] ?? $json["output_format"] ?? $params["format"] ?? $params["output_format"] ?? null;
+            $typeHints = $json["type_hints"] ?? Input::$params["type_hints"] ?? [];
+            $typeFormats = $json["type_formats"] ?? Input::$params["type_formats"] ?? [];
+            $srs = $json["srs"] ?? Input::$params["srs"] ?? $srs ?? null;
+            $outputFormat = !empty($json["format"]) ? $json["format"] : (!empty($json["output_format"]) ? $json["output_format"] : Input::$params["format"] ?? Input::$params["output_format"]);
 
             // Set input params from JSON
             // ==========================
@@ -106,14 +97,14 @@ class Sql extends Controller
                     "q" => !empty($json["q"]) ? $json["q"] : null,
                     "client_encoding" => !empty($json["client_encoding"]) ? $json["client_encoding"] : null,
                     "geoformat" => !empty($json["geoformat"]) ? $json["geoformat"] : (!empty($json["geo_format"]) ? $json["geo_format"] : null),
-                    "key" => !empty($json["key"]) ? $json["key"] : ($params["key"] ?? null),
+                    "key" => !empty($json["key"]) ? $json["key"] : Input::$params["key"],
                     "geojson" => !empty($json["geojson"]) ? $json["geojson"] : null,
                     "allstr" => !empty($json["allstr"]) ? $json["allstr"] : null,
                     "alias" => !empty($json["alias"]) ? $json["alias"] : null,
                     "lifetime" => !empty($json["lifetime"]) ? $json["lifetime"] : null,
                     "base64" => !empty($json["base64"]) ? $json["base64"] : null,
-                    "convert_types" => !empty($json["convert_types"]) ? $json["convert_types"] : ($params["convert_types"] ?? null),
-                    "params" => !empty($json["params"]) ? $json["params"] : ($params["params"] ?? null),
+                    "convert_types" => !empty($json["convert_types"]) ? $json["convert_types"] : Input::$params["convert_types"],
+                    "params" => !empty($json["params"]) ? $json["params"] : Input::$params["params"],
                     "type_hints" => $typeHints,
                     "type_formats" => $typeFormats,
                     "format" => $outputFormat,
@@ -162,6 +153,9 @@ class Sql extends Controller
         if (!empty($this->cacheInfo)) {
             $response["cache"] = $this->cacheInfo;
         }
+        if (!empty($response['returning'])) {
+            $response['returning'] = $response['returning']['data'];
+        }
         return $response;
     }
 
@@ -170,19 +164,15 @@ class Sql extends Controller
      * @throws PhpfastcacheInvalidArgumentException
      * @throws GC2Exception
      */
-    public function post_index($r): array
+    public function post_index(): array
     {
+        $r = func_get_arg(0);
 
         // Use bulk if content type is text/plain
         if (Input::getContentType() == Input::TEXT_PLAIN) {
-            // Use the count of @ to determine if subuser is present
-            $dbSplit = explode("@", $r["user"]);
-            if (sizeof($dbSplit) > 2) {
-                $this->subUser = Util::extractUserName($r["user"]);
-            } elseif (!empty($_SESSION["subuser"])) {
+            [$this->subUser] = Util::extractUserFromSubUserString($r["user"]);
+            if (!empty($_SESSION["subuser"])) {
                 $this->subUser = $_SESSION["screen_name"];
-            } else {
-                $this->subUser = null;
             }
             // Set API key from headers
             Input::setParams(
@@ -242,7 +232,7 @@ class Sql extends Controller
     private function transaction(?string $clientEncoding = null, ?array $typeHints = null, bool $convertReturning = true, ?array $typeFormats = null): string
     {
         $response = [];
-        $rule = new Rule();
+        $rule = new Rule(connection: $this->api->connection);
         $walkerRelation = new TableWalkerRelation();
         $factory = new StatementFactory(PDOCompatible: true);
         $select = $factory->createFromString($this->q);
@@ -269,7 +259,7 @@ class Sql extends Controller
 
         // Get rules and set them
         $walkerRule = new TableWalkerRule(!empty($response["is_auth"]) ? $this->subUser ?: Connection::$param['postgisdb'] : "*", "sql", strtolower($operation), '');
-        $rules = $rule->get($this->api);
+        $rules = $rule->get();
         $walkerRule->setRules($rules);
         $select->dispatch($walkerRule);
 
@@ -281,10 +271,10 @@ class Sql extends Controller
                 $split = explode(".", $usedRelations["updateAndDelete"][0]);
             }
             $userFilter = new UserFilter($this->subUser ?: Connection::$param['postgisdb'], "sql", strtolower($operation), "*", $split[0], $split[1]);
-            $geofence = new Geofence($userFilter);
+            $geofence = new Geofence($userFilter, $this->api->connection);
             $auth = $geofence->authorize($rules);
             $finaleStatement = $factory->createFromAST($select, true)->getSql();
-            if (!empty($auth["access"]) && $auth["access"] == Geofence::LIMIT_ACCESS) {
+            if ($auth["access"] == Geofence::LIMIT_ACCESS) {
                 try {
                     $geofence->postProcessQuery($select, $rules, Input::get('params'), $typeHints);
                 } catch (Exception $e) {

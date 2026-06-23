@@ -221,18 +221,22 @@ class Model
     /**
      * Executes a prepared PDO statement with the given parameters.
      *
+     * Rolls back any open transaction on any Throwable (not just
+     * PDOException) so a controller-level TypeError or RuntimeException
+     * can't leave a transaction hanging on a worker-shared PDO.
+     *
      * @param PDOStatement $statement The prepared PDO statement to be executed.
      * @param array $params An optional array of parameters to bind to the statement during execution.
      *
      * @return bool Always returns true if the statement executes successfully.
-     * @throws PDOException If the statement execution fails, the exception is thrown and the transaction (if active) is rolled back.
+     * @throws \Throwable If the statement execution fails, the exception is rethrown and the transaction (if active) is rolled back when $autoRollback is true.
      *
      */
     public function execute(PDOStatement $statement, array $params = [], bool $autoRollback = true): true
     {
         try {
             $statement->execute(empty($params) ? null : $params);
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             if ($autoRollback) {
                 $this->rollback();
             }
@@ -266,12 +270,139 @@ class Model
     }
 
     /**
+     * Runs $work inside a database transaction.
+     *
+     * Begins the transaction, invokes the callable, commits on success, and
+     * rolls back on any Throwable before rethrowing. Returns whatever the
+     * callable returns.
+     *
+     * @template T
+     * @param callable(): T $work
+     * @return T
+     * @throws \Throwable
+     */
+    public function withTransaction(callable $work): mixed
+    {
+        $this->begin();
+        try {
+            $result = $work();
+            $this->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * Runs $work in a transactional sandbox that is always rolled back.
+     *
+     * Use this for validation, dry runs, or temp-table inspection where
+     * you need transactional semantics for the SQL itself but never want
+     * the work to persist.
+     *
+     * If the connection is already in a transaction we wrap $work in a
+     * SAVEPOINT and ROLLBACK TO it — so we don't disturb the outer
+     * transaction. Otherwise we open a fresh transaction and roll it
+     * back at the end.
+     *
+     * Returns whatever $work returns. If $work throws, the rollback still
+     * runs and the exception propagates.
+     *
+     * @template T
+     * @param callable(): T $work
+     * @return T
+     * @throws \Throwable
+     */
+    public function withRollback(callable $work): mixed
+    {
+        $this->connect();
+        $pdo = $this->getPdoConnection();
+        if ($pdo->inTransaction()) {
+            $name = 'gc2_sp_' . bin2hex(random_bytes(6));
+            $pdo->exec("SAVEPOINT $name");
+            try {
+                return $work();
+            } finally {
+                try {
+                    $pdo->exec("ROLLBACK TO SAVEPOINT $name");
+                    $pdo->exec("RELEASE SAVEPOINT $name");
+                } catch (\Throwable $e) {
+                    error_log("withRollback savepoint cleanup failed: " . $e->getMessage());
+                }
+            }
+        }
+        $this->begin();
+        try {
+            return $work();
+        } finally {
+            $this->rollback();
+        }
+    }
+
+    /**
+     * Rolls back any open transactions on every cached PDO connection.
+     *
+     * Why: in FrankenPHP worker mode self::$PdoConnections persists between
+     * requests. If a controller throws between begin() and commit(), the
+     * transaction stays open and is inherited by the next request on the
+     * same connection. Call this in a finally around the per-request
+     * dispatch and after each worker iteration.
+     *
+     * @return void
+     */
+    public static function rollbackAllOpenTransactions(): void
+    {
+        foreach (self::$PdoConnections as $pdo) {
+            try {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+            } catch (\Throwable $e) {
+                error_log("rollbackAllOpenTransactions: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Issues DISCARD ALL on every cached PDO connection.
+     *
+     * Why: in FrankenPHP worker mode the same PDO is reused across
+     * requests from the same JWT user. DISCARD ALL clears session-level
+     * state that a previous request may have left behind: temp tables,
+     * SET (non-LOCAL) GUC values, prepared statements, LISTEN channels,
+     * cached plans and sequences. This is a defense-in-depth measure
+     * intended to be called once per worker iteration, after
+     * rollbackAllOpenTransactions(); DISCARD ALL itself cannot run in
+     * an open transaction.
+     *
+     * Failures (dead connection, PgBouncer rejecting it in transaction
+     * pooling mode, etc.) are logged and skipped — the next real query
+     * will re-establish the connection if needed.
+     *
+     * @return void
+     */
+    public static function resetSessionStateAllConnections(): void
+    {
+        foreach (self::$PdoConnections as $pdo) {
+            try {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $pdo->exec('DISCARD ALL');
+            } catch (\Throwable $e) {
+                error_log("resetSessionStateAllConnections: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
      * Prepares an SQL statement for execution.
      *
      * @param string $sql The SQL query to prepare.
      *
      * @return PDOStatement The prepared PDO statement.
-     * @throws PDOException If an error occurs while preparing the statement.
+     * @throws \Throwable If an error occurs while preparing the statement.
      */
     public function prepare(string $sql): PDOStatement
     {
@@ -279,7 +410,7 @@ class Model
         $this->getPdoConnection()->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         try {
             return $this->getPdoConnection()->prepare($sql);
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             $this->rollback();
             throw $e;
         }
@@ -320,7 +451,7 @@ class Model
                             // Return integer
                             $result = $this->getPdoConnection()->exec($query);
                     }
-                } catch (PDOException $e) {
+                } catch (\Throwable $e) {
                     $this->rollBack();
                     throw $e;
                 }
@@ -404,7 +535,7 @@ class Model
                         attnum                           AS ordinal_position,
                         atttypid :: REGTYPE              AS udt_name,
                         typname,
-                        attnotnull                       AS is_nullable,
+                        attnotnull                       AS not_null,
                         format_type(atttypid, atttypmod) AS full_type,
                         pg_get_expr(d.adbin, d.adrelid)  AS default_value,
                     
@@ -468,7 +599,10 @@ class Model
             }
             $index = $this->getIndexes($_schema, $_table);
             $comments = $this->getColumnComments($_schema, $_table);
-            $fieldconf = !empty($this->geometryColumns["fieldconf"]) ? (array)json_decode($this->geometryColumns["fieldconf"]) : [];
+            $fieldconf = $this->getGeometryColumns($table, "fieldconf");
+            if (!empty($fieldconf)) {
+                $fieldconf = json_decode($fieldconf);
+            }
 
 
             while ($row = $this->fetchRow($res)) {
@@ -521,7 +655,7 @@ class Model
                             $foreignValues[] = ["value" => $value, "alias" => (string)$alias];
                         }
                     }
-                } elseif (isset($restrictions[$row["column_name"]]) && $restrictions[$row["column_name"]] == "*" && $getEnums) {
+                } elseif ($restriction && isset($restrictions[$row["column_name"]]) && $restrictions[$row["column_name"]] == "*" && $getEnums) {
                     $t = new Table($table);
                     foreach ($t->getGroupByAsArray($column)["data"] as $value) {
                         $foreignValues[] = ["value" => $value, "alias" => (string)$value];
@@ -551,15 +685,17 @@ class Model
                     "numeric_scale" => $row["numeric_scale"],
                     "max_bytes" => $row["max_bytes"],
                     "reference" => count($references) == 0 ? null : $references,
-                    "restriction" => sizeof($foreignValues) > 0 ? $foreignValues : null,
-                    "is_nullable" => $fieldconf[$column]->is_nullable ?? null,
+                    "restriction" => sizeof($foreignValues) > 0 && $restriction ? $foreignValues : null,
+                    "is_nullable" => $fieldconf->$column->is_nullable ?? null,
                 );
 
                 // The following is only set on tables
                 if (!$temp) {
                     if ($this->isTableOrView($_schema . '.' . $_table)['data'] == "TABLE") {
+                        $enablePseudoNotNull = App::$param['enablePseudoNotNull'] ?? false;
                         $tmpArr["is_unique"] = !empty($index["is_unique"][$row["column_name"]]);
                         $tmpArr["is_primary"] = !empty($index["is_primary"][$row["column_name"]]);
+                        if (!$enablePseudoNotNull) $tmpArr["is_nullable"] = !$row['not_null']; // For tables, we always set this form schema, not metadata
                         $tmpArr["default_value"] = $row['default_value'];
                         $tmpArr["identity_generation"] = $row['identity_generation'];
                         $tmpArr["index_method"] = !empty($index["index_method"][$row["column_name"]]) ? $index["index_method"][$row["column_name"]] : null;
@@ -619,8 +755,7 @@ class Model
                 break;
             case "PDO" :
                 if (empty($this->getPdoConnection()) || !$this->isPdoConnected()) {
-                    // Quiet down on nonsense errors
-                    //error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
+                    error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
                     $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port}", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
                     $this->execQuery("set client_encoding='UTF8'");
                 }
@@ -631,18 +766,31 @@ class Model
     /**
      * Checks if the PDO connection is successfully established.
      *
+     * If SELECT 1 fails while a transaction is open, the transaction may be
+     * in aborted state — every subsequent query would fail with
+     * "current transaction is aborted, commands ignored until end of
+     * transaction block". Roll back the leftover transaction and retry
+     * once before declaring the connection dead.
+     *
      * @return bool Returns true if the PDO connection is active and responsive, otherwise false.
      */
     private function isPdoConnected(): bool
     {
+        $pdo = $this->getPdoConnection();
         try {
             // Lightweight no-op query
-            $this->getPdoConnection()->query('SELECT 1');
+            $pdo->query('SELECT 1');
             return true;
         } catch (PDOException $e) {
-            // Could be connected, but the check above is aborted due to an error and no rollback
-            if ($this->getPdoConnection()->inTransaction()) {
-                return true;
+            if ($pdo->inTransaction()) {
+                try {
+                    $pdo->rollBack();
+                    $pdo->query('SELECT 1');
+                    return true;
+                } catch (PDOException $e2) {
+                    error_log("PDO connection unrecoverable after rollback: " . $e2->getMessage());
+                    return false;
+                }
             }
             error_log("PDO connection failed: " . $e->getMessage());
             return false;

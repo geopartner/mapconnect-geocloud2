@@ -10,9 +10,9 @@ namespace app\controllers;
 
 use app\inc\Controller;
 use app\inc\Input;
-use app\inc\Util;
 use app\conf\Connection;
 use app\conf\App;
+use app\inc\Util;
 use app\models\Database;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 
@@ -34,7 +34,7 @@ class Tilecache extends Controller
     function __construct()
     {
         parent::__construct();
-        $this->db = Util::extractDatabaseName(Input::getPath()->part(2));
+        $this->db = Util::extractUserFromSubUserString(Input::getPath()->part(2))[1];
     }
 
     /**
@@ -44,11 +44,7 @@ class Tilecache extends Controller
     public function delete_index(): array
     {
         $layer = new \app\models\Layer();
-        $result = $layer->getAll(Database::getDb(), true, Input::getPath()->part(4), false, true, false);
-        $cache = null;
-        if (!empty($result["data"]) && isset($result["data"][0]["def"]) && $result["data"][0]["def"] !== null) {
-            $cache = $result["data"][0]["def"]->cache;
-        }
+        $cache = $layer->getAll(Database::getDb(), true, Input::getPath()->part(4), false, true, false)["data"][0]["def"]->cache;
 
         // Default
         // =======
@@ -119,7 +115,7 @@ class Tilecache extends Controller
                 $response['message'] = "Tile cache deleted.";
                 break;
 
-            case "bdb":
+            case "bdb";
                 $dba = dba_open(App::$param['path'] . "app/wms/mapcache/bdb/" . Connection::$param["postgisdb"] . "/" . "feature.polygon/bdb_feature.polygon.db", "c", "db4");
 
                 $key = dba_firstkey($dba);

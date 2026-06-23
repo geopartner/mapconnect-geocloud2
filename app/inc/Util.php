@@ -226,6 +226,26 @@ class Util
     }
 
     /**
+     * @return string  e.g. "https://example.com" or "http://localhost:8080"
+     */
+    public static function host(): string
+    {
+        $port = $_SERVER['SERVER_PORT'] ?? '';
+        return self::protocol() . '://' . ($_SERVER['SERVER_NAME'] ?? '')
+            . ($port !== '' && $port !== '80' && $port !== '443' ? ":$port" : '');
+    }
+
+    /**
+     * @return string  Base URL + path prefix (strips "index.php" and deduplicates slashes)
+     */
+    public static function thePath(): string
+    {
+        $uri = str_replace('index.php', '', $_SERVER['REDIRECT_URL'] ?? $_SERVER['REQUEST_URI'] ?? '');
+        $uri = str_replace('//', '/', $uri);
+        return self::host() . $uri;
+    }
+
+    /**
      * @param string $ip
      * @param string $ipWithCidr
      * @return bool
@@ -366,7 +386,7 @@ class Util
         // Turn off output buffering
         ini_set('output_buffering', 'off');
         // Turn off PHP output compression
-        ini_set('zlib.output_compression', '0');
+        ini_set('zlib.output_compression', 'off');
         // Implicitly flush the buffer(s)
         ini_set('implicit_flush', 'true');
         ob_implicit_flush();
@@ -483,34 +503,22 @@ class Util
     }
 
     /**
-     * Extract database name from a string that may have prefix(es) before @ symbols.
-     * Takes the part after the last @ symbol, or returns the original string if no @ is found.
+     * Extracts the main user and sub-user components from a string formatted as "mainUser@subUser".
      *
-     * @param string $input The input string (e.g., "user@domain@database" or "database")
-     * @return string The database name (part after the last @)
+     * @param string $userString The input string containing the main user and sub-user, separated by '@'.
+     * @return array An array where the first element is the main user and the second element is the sub-user,
+     *               or null if no sub-user is present.
      */
-    public static function extractDatabaseName(string $input): string
+    public static function extractUserFromSubUserString(string $userString): array
     {
-        $parts = explode("@", $input);
-        $databaseName = $parts[count($parts) - 1];
-        return $databaseName;
-    }
-
-    /**
-     * Extract username from a string that may have more than one @ symbol.
-     * The username is the string before the last @ symbol. The username can contain @ symbols.
-     * Find the location of the last @ symbol and return the substring before it. If no @ symbol is found, return the original string.
-     *
-     * @param string $input The input string (e.g., "user@domain@database" or "database")
-     * @return string The username (part before the last @)
-     */
-    public static function extractUserName(string $input): string
-    {
-        $lastAtPos = strrpos($input, '@');
-        if ($lastAtPos === false) {
-            return $input;
+        $separatorPosition = strrpos($userString, '@');
+        if ($separatorPosition === false) {
+            return [null, $userString];
         }
-        $userName = substr($input, 0, $lastAtPos);
-        return $userName;
+
+        return [
+            substr($userString, 0, $separatorPosition),
+            substr($userString, $separatorPosition + 1),
+        ];
     }
 }

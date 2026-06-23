@@ -14,6 +14,7 @@ use app\api\v4\AcceptableMethods;
 use app\api\v4\AcceptableContentTypes;
 use app\api\v4\Controller;
 use app\api\v4\ApiInterface;
+use app\api\v4\Responses\StreamedResponse;
 use app\exceptions\GC2Exception;
 use Closure;
 use ReflectionClass;
@@ -166,8 +167,22 @@ class Route2
                     }
                 }
             }
-            $controller->validate();
-            $response = $controller->$action($r);
+            try {
+                $controller->validate();
+                $response = $controller->$action($r);
+            } finally {
+                // Roll back any transaction the controller left open on a
+                // cached PDO. Safe no-op when commit() already closed it.
+                Model::rollbackAllOpenTransactions();
+            }
+            // Streaming branch: bypass JSON-encoding, let the callback
+            // write directly to php://output.
+            if ($response instanceof StreamedResponse) {
+                header('HTTP/1.0 ' . $response->getStatus() . ' ' . Util::httpCodeText($response->getStatus()));
+                header('Content-Type: ' . $response->contentType);
+                ($response->callback)();
+                return;
+            }
             $data = $response->getData();
             $status = $response->getStatus();
             header("HTTP/1.0 $status " . Util::httpCodeText($status));

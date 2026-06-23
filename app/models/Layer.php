@@ -101,9 +101,13 @@ class Layer extends Table
      */
     public function getValueFromKey(string $_key_, string $column): ?string
     {
-        $sql = "select $column from $this->table where _key_=:key";
+        $split = explode(".", $_key_);
+        $schema = $split[0];
+        $table = $split[1];
+        $geom = $split[2];
+        $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
         $res = $this->prepare($sql);
-        $this->execute($res, ['key' => $_key_]);
+        $this->execute($res);
         $row = $this->fetchRow($res);
         return $row[$column];
     }
@@ -121,7 +125,7 @@ class Layer extends Table
      * @throws GC2Exception
      * @throws PhpfastcacheInvalidArgumentException
      */
-    public function getAll(string $db, ?bool $auth, ?string $query = null, ?bool $includeExtent = false, ?bool $parse = false, ?bool $es = false, ?bool $lookupForeignTables = true, ?array $jwt = null): array
+    public function getAll(string $db, ?bool $auth, ?string $query = null, ?bool $includeExtent = false, ?bool $parse = false, ?bool $es = false, ?bool $lookupForeignTables = true, ?array $jwt = null, bool $restriction = true): array
     {
         // If user is signed in with another user than the requested,
         // when consider the user as not signed in.
@@ -130,7 +134,7 @@ class Layer extends Table
         }
 
         $cacheType = "meta";
-        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es);
+        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
 
         $CachedString = Cache::getItem($cacheId);
 
@@ -369,7 +373,7 @@ class Layer extends Table
                 } else {
                     $fieldConf = [];
                 }
-                $fields = $this->getMetaData($rel, false, true, $restrictions, null, true, $lookupForeignTables);
+                $fields = $this->getMetaData($rel, false, $restriction, $restrictions, null, true, $lookupForeignTables);
 
                 foreach ($fields as $key => $field) {
                     // If column comment is empty, we output from field conf
@@ -379,6 +383,9 @@ class Layer extends Table
                     $fields[$key]['alias'] = $fieldConf[$key]['alias'];
                     $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
                     $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    $fields[$key]['desc'] = $fieldConf[$key]['desc'];
+                    $fields[$key]['properties'] = !empty($fieldConf[$key]['properties']) ? json_decode($fieldConf[$key]['properties'], true) : null;
+                    // restriction ??
                 }
 
                 // Sort fields
