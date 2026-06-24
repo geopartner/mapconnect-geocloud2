@@ -27,6 +27,7 @@ class Mapfile extends Model
     {
         parent::__construct(connection: $connection);
         $this->mapServerHost = Connection::$param['mapserverhost'] ?? $this->connection->host;
+        $this->mapServerPort = Connection::$param['mapserverport'] ?? $this->connection->port;
         $settings = new Setting(connection: $connection);
         $extents = $settings->get()["data"]->extents ?? null;
         $schema = $this->connection->schema;
@@ -205,8 +206,8 @@ class Mapfile extends Model
     {
         $s = "user=" . $this->connection->user;
         $s .= " dbname=" . $this->connection->database;
-            $s .= " host=" . $this->mapServerHost;
-        $s .= " port=" . $this->connection->port;
+        $s .= " host=" . $this->mapServerHost;
+        $s .= " port=" . $this->mapServerPort;
         if ($this->connection->password) {
             $s .= " password=" . $this->connection->password;
         }
