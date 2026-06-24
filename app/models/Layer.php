@@ -134,7 +134,7 @@ class Layer extends Table
         }
 
         $cacheType = "meta";
-        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
+        $cacheId = $this->postgisdb . "_" . Session::getUser(sanitize: true) . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
 
         $CachedString = Cache::getItem($cacheId);
 
