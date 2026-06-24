@@ -152,16 +152,21 @@ try {
         $db = $dbSplit[1] ?? $dbSplit[0];
         // parentUser is superuser
         $parentUser = $user == $db;
+
+        // Get database from path
+        $db = Util::extractDatabaseName(Input::getPath()->part(2));
+        
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
         \app\wfs\bootstrap_legacy_wfs($db, $user, $parentUser);
+
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
         setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
             Session::start();
         }
-        
+
         //$dbSplit = explode("@", Input::getPath()->part(2));
         //Database::setDb($dbSplit[1] ?? $dbSplit[0]);
 
