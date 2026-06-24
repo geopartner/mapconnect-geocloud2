@@ -521,4 +521,18 @@ class Util
             substr($userString, $separatorPosition + 1),
         ];
     }
+
+    /**
+     * Extract database name from a string that may have prefix(es) before @ symbols.
+     * Takes the part after the last @ symbol, or returns the original string if no @ is found.
+     *
+     * @param string $input The input string (e.g., "user@domain@database" or "database")
+     * @return string The database name (part after the last @)
+     */
+    public static function extractDatabaseName(string $input): string
+    {
+        $parts = explode("@", $input);
+        $databaseName = $parts[count($parts) - 1];
+        return $databaseName;
+    }
 }
