@@ -378,12 +378,12 @@ class Layer extends Table
                 foreach ($fields as $key => $field) {
                     // If column comment is empty, we output from field conf
                     if (empty($field['comment'])) {
-                        $fields[$key]['comment'] = $fieldConf[$key]['desc'];
+                        $fields[$key]['comment'] = $fieldConf[$key]['desc'] ?? '';
                     }
-                    $fields[$key]['alias'] = $fieldConf[$key]['alias'];
-                    $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
-                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
-                    $fields[$key]['desc'] = $fieldConf[$key]['desc'];
+                    $fields[$key]['alias'] = $fieldConf[$key]['alias'] ?? '';
+                    $fields[$key]['queryable'] = (bool)($fieldConf[$key]['querable'] ?? false);
+                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'] ?? 0;
+                    $fields[$key]['desc'] = $fieldConf[$key]['desc'] ?? '';
                     $fields[$key]['properties'] = !empty($fieldConf[$key]['properties']) ? json_decode($fieldConf[$key]['properties'], true) : null;
                     // restriction ??
                 }
@@ -399,7 +399,7 @@ class Layer extends Table
                 });
                 // Filter out ignored fields
                 $fields = array_filter($fields, function ($item, $key) use (&$fieldConf) {
-                    if (empty($fieldConf[$key]['ignore'])) {
+                    if (empty($fieldConf[$key]['ignore'] ?? false)) {
                         return true;
                     }
                     return false;
