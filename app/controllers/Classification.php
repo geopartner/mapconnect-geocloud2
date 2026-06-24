@@ -52,6 +52,9 @@ class Classification extends Controller
     {
         $response = $this->auth(Input::getPath()->part(4));
         $data = json_decode(Input::get(null, true))->data ?? null;
+        if ($data === null) {
+            $data = (object)[];
+        }
         $data->force = true;
         return (!$response['success']) ? $response : $this->class->update(Input::getPath()->part(5), $data);
     }

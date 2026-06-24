@@ -357,7 +357,7 @@ class Classification extends Model
         $layer = new Layer(connection: $this->connection);
         $geometryType = $this->geometryType ?: $layer->getValueFromKey($this->layer, "type");
         $classes = [self::createClass($geometryType, $layer->getValueFromKey($this->layer, "f_table_title") ?: $layer->getValueFromKey($this->layer, "f_table_name"), null, 10, "#" . $color, $data)];
-        if ($data->custom->force) {
+        if (!empty($data->custom) && $data->custom->force) {
             $this->storeForce(json_encode($classes, JSON_UNESCAPED_UNICODE));
         } else {
             $this->storeFromWizard(json_encode($classes, JSON_UNESCAPED_UNICODE));
