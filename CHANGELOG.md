@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
+## [2026.6.4] - 2026-18-6
+### CHANGED
+- Update UUID defaults to use `uuid_generate_v4()` instead of `gen_random_uuid()` from the uuid-ossp extension.
+  The latter is not available on all PostgreSQL versions.
+
+## [2026.6.3] - 2026-18-6
+### Added
+- Add change history for `settings.key_value` and `settings.geometry_columns_join`. Each table now has a mirrored `*_history` table populated by an `AFTER` trigger (`settings.history_trigger()`) that records every INSERT/UPDATE/DELETE with the operation, DB user, and timestamp.
+
+### Fixed
+- Refactor WMS GetMap request handling: improve CRS and SRS fallback logic, add support for HTTP Basic Authentication credentials in source URL generation.
+- Refactor WFS-t server for worker mode – no more globals.
+
+## [2026.6.2] - 2026-15-6
+### Fixed
+- Use table comments as fallback for abstract generation in WMS/WFS configurations.
+- Update v4 API response codes to use `303` for redirection across controllers and standardize patch response handling.
+
+### Added
+- Add `noRestriction` query parameter to Meta v4 API sp field restrictions can be disabled.
+
+## [2026.6.1] - 2026-4-6
+### Added
+- A QGIS QML style XML string can now be set in the layer dialog. GC2 will use this QML to create a minimal QGS project file for the layer. 
+  This makes it easier to use QGIS styles and less error-prone. Upload of whole QGIS QGS files is still supported. 
+
+### Changed
+- Replace `SpinnerField` with `ComboBox` for line width fields in class styling, so layer attributes can be used to set the line width.
+
+## [2026.6.0] - 2026-3-6
+### Fixed
+- Update `Commit` v4 API to use `_schema` and `_rel` keys instead of `f_table_schema` and `f_table_name`.
+- Add `_restriction` to in`Meta` v4 API.
+- Refactor: centralize subuser and database string parsing using `Util::extractUserFromSubUserString`, so sub-user names with @ are not allowed.
+
+## [2026.5.5] - 2026-28-5
+### Fixed
+- Use settings.getColumns instead of hardcoded SQL query to settings.geometry_columns_view several places for performance.
+
+## [2026.5.4] - 2026-28-5
+### Fixed
+- The response for a RETURNING clause in v2 SQL API was changed. Reverted to the previous behavior.
+
+### Security
+- Add guard to restrict sub-users from accessing other sub-users' data.
+- Add schema ownership guard in `Privilege` controller.
+
+## [2026.5.3] - 2026-28-5
+### Fixed
+- SQL transactions without parameters didn't return data when using the RETURNING clause.
+
+### Changed
+- OpenAPI documentation for SQL API now has a response schema.
+
+## [2026.5.2] - 2026-27-5
+### Added
+- App.php option `enabledPseudoNotNull`, if set 'is_nullable' on tables is set from Meta and not schema. 
+  This makes it possible to use pseudo-not-null constraints in the Vidi editor.
+- App.php option `publicSchemas`, an array with schemas, which can be accessed with GET by all sub-users. Like getting schema definitions.
+
+### Fixed
+- Copy `Field settings` in `Copy properties` dialog.
+
+## [2026.5.1] - 2026-8-5
+### Fixed
+- Fix nullable column handling in metadata and schema updates.
+
+## [2026.5.0] - 2026-1-5
+### CHANGED
+- Refactor of MapFile controller into a controller class and model class. The latter can be injected with a Connection object and is ready for use in the V4 API.
+- Extract `renderGmlMetaData` method in `Mapfile` so it can be applied to both WFS and WMS. The latter didn't have the metadata, which is used in GetFeatureInfo requests resulting in no geometry returned.
+
+## [2026.5.0] - 2026-1-5
+### Fixed
+- Refactor `namesOnly` checks in Schema and Table GET APIs to standardize input validation.
+
 ## [2026.4.2] - 2026-27-4
 ### Fixed
 - Version 2 of the SQL decodes JSON/JSONB fields starting with the 2026.3.0 release. This was not intended. This is only a version 4 API behavior. The change is rolled back.
@@ -21,8 +97,7 @@ and this project adheres to [CalVer](https://calver.org/).
 - Event: implementation of Shape filter with column projection.
 
 ### Security
-- Controller scope in v4 API was not working, which could allow sub-users to call super-user-only APIs. 
-
+- Controller scope in v4 API was not working, which could allow sub-users to call super-user-only APIs.
 
 ## [2026.3.11] - 2026-30-3
 ### Changed

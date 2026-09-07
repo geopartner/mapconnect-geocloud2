@@ -52,7 +52,7 @@ class Session extends Model
             $response['data']['screen_name'] = $_SESSION['screen_name'];
             $response['data']['parentdb'] = $_SESSION['parentdb'];
             $response['data']['email'] = $_SESSION['email'];
-            $response['data']['passwordExpired'] = $_SESSION['passwordExpired'];
+            $response['data']['passwordExpired'] = $_SESSION['passwordExpired'] ?? false;
             $response['data']['subuser'] = $_SESSION["subuser"];
             $response['data']['subusers'] = $_SESSION['subusers'];
             $response['data']['properties'] = $_SESSION['properties'];

@@ -99,7 +99,7 @@ class Statement
     {
         $response = [];
         $authResponse = [];
-        $rule = new Rule();
+        $rule = new Rule(connection: $this->sql->connection);
         $walkerRelation = new TableWalkerRelation();
         $factory = new StatementFactory(PDOCompatible: true);
         $select = $factory->createFromString($this->q);
@@ -126,7 +126,7 @@ class Statement
 
         // Get rules and set them
         $walkerRule = new TableWalkerRule($this->subUser ?? $this->connection->database, "sql", strtolower($operation), '');
-        $rules = $rule->get($this->sql);
+        $rules = $rule->get();
         $walkerRule->setRules($rules);
         $select->dispatch($walkerRule);
 
@@ -138,7 +138,7 @@ class Statement
                 $split = explode(".", $usedRelations["updateAndDelete"][0]);
             }
             $userFilter = new UserFilter($this->subUser ?: $this->connection->database, "sql", strtolower($operation), "*", $split[0], $split[1]);
-            $geofence = new Geofence($userFilter);
+            $geofence = new Geofence($userFilter, $this->connection);
             $auth = $geofence->authorize($rules);
             $finaleStatement = $factory->createFromAST($select, true)->getSql();
             if (!empty($auth["access"]) && $auth["access"] == Geofence::LIMIT_ACCESS) {
@@ -174,7 +174,6 @@ class Statement
                 $this->cacheInfo["tags"] = $CachedString->getTags();
                 $this->cacheInfo["signature"] = md5(serialize($response));
             } else {
-                ob_start();
                 $response = $this->sql->sql(
                     q: $this->q,
                     clientEncoding: $clientEncoding,
