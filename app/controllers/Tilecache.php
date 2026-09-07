@@ -10,6 +10,7 @@ namespace app\controllers;
 
 use app\inc\Controller;
 use app\inc\Input;
+use app\inc\Util;
 use app\conf\Connection;
 use app\conf\App;
 use app\inc\Util;
@@ -115,7 +116,7 @@ class Tilecache extends Controller
                 $response['message'] = "Tile cache deleted.";
                 break;
 
-            case "bdb";
+            case "bdb":
                 $dba = dba_open(App::$param['path'] . "app/wms/mapcache/bdb/" . Connection::$param["postgisdb"] . "/" . "feature.polygon/bdb_feature.polygon.db", "c", "db4");
 
                 $key = dba_firstkey($dba);

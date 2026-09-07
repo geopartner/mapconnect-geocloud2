@@ -10,6 +10,7 @@ namespace app\api\v1;
 
 use app\exceptions\GC2Exception;
 use app\inc\Controller;
+use app\inc\Util;
 use app\inc\Input;
 use app\inc\Route;
 use app\inc\Session;
