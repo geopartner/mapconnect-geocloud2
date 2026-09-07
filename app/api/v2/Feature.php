@@ -14,7 +14,6 @@ use app\inc\Input;
 use app\inc\Route;
 use app\inc\Response;
 use app\inc\Session;
-use app\inc\Util;
 use app\libs\GeometryFactory;
 use app\libs\gmlConverter;
 use app\models\Database;
