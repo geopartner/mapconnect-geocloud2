@@ -78,7 +78,7 @@ class Layer extends Table
      */
     public function getPrivilegesAsArray(string $schema, string $table): array
     {
-        $sql = "select distinct privileges from settings.geometry_columns_view where f_table_name=:table and f_table_schema=:schema";
+        $sql = "select distinct privileges from settings.geometry_columns_join where f_table_name=:table and f_table_schema=:schema";
         $res = $this->prepare($sql);
         $this->execute($res, ['table' => $table, 'schema' => $schema]);
         $privileges = $res->fetchAll(PDO::FETCH_COLUMN);
@@ -208,25 +208,27 @@ class Layer extends Table
             // Check if Es is online
             // =====================
             $esOnline = false;
-            $split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
-            if (!empty($split[2])) {
-                $port = $split[2];
-            } else {
-                $port = "9200";
-            }
-            $esUrl = $split[0] . ":" . $split[1] . ":" . $port;
-            $ch = curl_init($esUrl);
-            curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
-            curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
-            curl_exec($ch);
-            $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            if ($httpcode == "200") {
-                $esOnline = true;
-            }
+            
+            // Skip checking if Elasticsearch is online
+            //$split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
+            //if (!empty($split[2])) {
+            //    $port = $split[2];
+            //} else {
+            //    $port = "9200";
+            //}
+            //$esUrl = $split[0] . ":" . $split[1] . ":" . $port;
+            //$ch = curl_init($esUrl);
+            //curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
+            //curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
+            //curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            //curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
+            //curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
+            //curl_exec($ch);
+            //$httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            //curl_close($ch);
+            //if ($httpcode == "200") {
+            //    $esOnline = true;
+            //}
 
             while ($row = $this->fetchRow($res)) {
                 // TODO Here check privileges and continue loop if user doesn't has access
