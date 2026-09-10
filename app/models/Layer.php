@@ -105,6 +105,8 @@ class Layer extends Table
         $schema = $split[0];
         $table = $split[1];
         $geom = $split[2];
+        // TODO: REPLACE WITH DIRECT SQL
+        // These columns exist only in the view: "coord_dimension","f_geometry_column", "f_table_name", "f_table_schema", "srid","type"
         $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
         $res = $this->prepare($sql);
         $this->execute($res);

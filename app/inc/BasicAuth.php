@@ -65,6 +65,7 @@ final class BasicAuth
         $split = explode(".", $layerName);
         $schema = $split[0];
         if ($this->isSubuser && $this->user != $schema) {
+            // Original
             $schema = $split[0];
             $table = $split[1];
             $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
@@ -75,6 +76,18 @@ final class BasicAuth
             } catch (PDOException $e) {
                 throw new ServiceException($e->getMessage());
             }
+
+            // TODO: REPLACE WITH DIRECT SQL and limit SQL injection
+            //$sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ LIKE :schema";
+            //$sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
+            //$postgisObject = new Model(connection: $this->connection);
+            //$res = $postgisObject->prepare($sql);
+            //try {
+            //    $postgisObject->execute($res, array("schema" => $layerName . ".%"));
+            //} catch (PDOException $e) {
+            //    throw new ServiceException($e->getMessage());
+            //}
+
             while ($row = $postgisObject->fetchRow($res)) {
                 $privileges = json_decode($row["privileges"]);
                 $prop = $userGroup ?: $this->user;
