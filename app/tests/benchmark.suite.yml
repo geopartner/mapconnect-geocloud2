@@ -1,0 +1,9 @@
+# Codeception Test Suite Configuration
+#
+# Suite for performance benchmarks.
+
+actor: BenchmarkTester
+modules:
+    enabled:
+        - Asserts
+        - \Helper\Benchmark
