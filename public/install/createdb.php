@@ -108,6 +108,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db->createdb($dbName, 'template0');
                     $messages[] = "Database '" . $dbName . "' created.";
                     $created = true;
+
+                    // once the database is created, we need to insert a user to the public.users table in mapcentia database.
+                    $db = new Database(new \app\inc\Connection(database: 'mapcentia'));
+                    $sql = "INSERT INTO public.users (
+                            screenname,
+                            pw,
+                            email,
+                            created,
+                            parentdb,
+                            default_user
+                        )
+                        VALUES (
+                            '" . $dbName . "',
+                            'none',
+                            'none',
+                            now(),
+                            null,
+                            false
+                        )
+                        ON CONFLICT ON CONSTRAINT user_unique DO NOTHING;";
+                    $db->execQuery($sql, "PDO", "transaction");
+
                 } catch (\Throwable $e) {
                     if (exceptionHasSqlState($e, '42P04')) { // duplicate_database
                         $messages[] = "Database '" . $dbName . "' already exists (SQLSTATE 42P04).";
