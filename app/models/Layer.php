@@ -133,8 +133,7 @@ class Layer extends Table
         }
 
         // Case 2: We are looking for a column that only exists in the view
-        $view_columns = ["coord_dimension", "srid", "type", "_key_"];
-        // The same logic applies for _key_ as it is supplied by the user. However by looking for _key_ in the view, we check if the key is still relevant.
+        $view_columns = ["coord_dimension", "srid", "type", "_key_"]; // _key_ is added to the list in order to check for relevancy.
         if (in_array($column, $view_columns)) {
             // Escape values by doubling single quotes (PostgreSQL string escape)
             $schemaEsc = str_replace("'", "''", $schema);
@@ -150,7 +149,7 @@ class Layer extends Table
             return $row[$column] ?? null;
         }
 
-        // Case 3: We are looking for other columns, proceed with the SQL query
+        // Case 3: We are looking for columns that exist in the table, lets look in that instead. Only get the specific column requested.
         $sql = "SELECT :column FROM settings.geometry_columns_join where _key_ = :key";
         $res = $this->prepare($sql);
         $this->execute($res, [
