@@ -1,4 +1,4 @@
-<?php  //[STAMP] 3a0e2c0aa47ace398974efd20c6a9048
+<?php  //[STAMP] 618d97ba2dc6d63318a86a2834d62964
 // phpcs:ignoreFile
 namespace _generated;
 
@@ -2085,6 +2085,17 @@ trait BenchmarkTesterActions
      */
     public function benchmarkFunction(callable $callable, int $iterations = 100, $args = null): array {
         return $this->getScenario()->runStep(new \Codeception\Step\Action('benchmarkFunction', func_get_args()));
+    }
+
+ 
+    /**
+     * [!] Method is generated. Documentation taken from corresponding module.
+     *
+     * Print benchmark results in a formatted table
+     * @see \Helper\Benchmark::printBenchmarkTable()
+     */
+    public function printBenchmarkTable(array $results, string $database, string $layer): void {
+        $this->getScenario()->runStep(new \Codeception\Step\Action('printBenchmarkTable', func_get_args()));
     }
 
  
