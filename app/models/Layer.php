@@ -101,17 +101,46 @@ class Layer extends Table
      */
     public function getValueFromKey(string $_key_, string $column): ?string
     {
+        // $split = explode(".", $_key_);
+        // $schema = $split[0];
+        // $table = $split[1];
+        // $geom = $split[2];
+        // $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
+        // $res = $this->prepare($sql);
+        // $this->execute($res);
+        // $row = $this->fetchRow($res);
+        // return $row[$column];
+
+        // Improved Version - Geopartner 2026
+        // TODO: REPLACE WITH DIRECT SQL
+        // These columns exist only in the view: "coord_dimension", "srid","type"
+        
         $split = explode(".", $_key_);
         $schema = $split[0];
         $table = $split[1];
         $geom = $split[2];
-        // TODO: REPLACE WITH DIRECT SQL
-        // These columns exist only in the view: "coord_dimension","f_geometry_column", "f_table_name", "f_table_schema", "srid","type"
+
+        // Case 1: We are looking for the columns represented in the _key_ itself
+        // The geometry column is the last part of the _key_, return the split value
+        if ($column === 'f_geometry_column') {
+            return $geom;
+        } 
+        // The table name is the second part of the _key_, return the split value
+        if ($column === 'f_table_name') {
+            return $table;
+        }
+        // The table schema is the first part of the _key_, return the split value
+        if ($column === 'f_table_schema') {
+            return $schema;
+        }
+
+        // Case 3: We are looking for other columns, proceed with the SQL query
         $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
         $res = $this->prepare($sql);
         $this->execute($res);
         $row = $this->fetchRow($res);
         return $row[$column];
+
     }
 
     /**
