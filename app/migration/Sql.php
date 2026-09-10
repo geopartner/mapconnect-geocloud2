@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2025 MapCentia ApS
+ * @copyright  2026-     MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -173,7 +174,7 @@ class Sql
         $sqls[] = "alter table settings.clients add social_signup boolean default false not null";
         $sqls[] = "alter table settings.clients add created timestamptz default now() not null";
         $sqls[] = "alter table settings.clients alter redirect_uri DROP NOT NULL";
-        $sqls[] = "INSERT INTO settings.clients (id, name, description, redirect_uri) values ('gc2-cli', 'gc2-cli', 'Client for use in CLI','[\"http://127.0.0.1:5657/auth/callback\"]')";
+        $sqls[] = "INSERT INTO settings.clients (id, name, description, redirect_uri) values ('gc2-cli', 'gc2-cli', 'Client for use in CLI','[\"http://127.0.0.1:5657/auth/callback\",\"https://mapgovidi.geopartner.dk/openid.html\", \"https://mapgogc2.geopartner.dk\",\"http://localhost:8080\", \"http://localhost:3000/openid.html\"]')";
         $sqls[] = "create table settings.cost
                     (
                         id        serial,
