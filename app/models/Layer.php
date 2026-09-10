@@ -101,6 +101,7 @@ class Layer extends Table
      */
     public function getValueFromKey(string $_key_, string $column): ?string
     {
+        // Original version
         // $split = explode(".", $_key_);
         // $schema = $split[0];
         // $table = $split[1];
@@ -111,10 +112,7 @@ class Layer extends Table
         // $row = $this->fetchRow($res);
         // return $row[$column];
 
-        // Improved Version - Geopartner 2026
-        // TODO: REPLACE WITH DIRECT SQL
-        // These columns exist only in the view: "coord_dimension", "srid","type"
-        
+        // Improved Version - Take every shortcut we can.
         $split = explode(".", $_key_);
         $schema = $split[0];
         $table = $split[1];
@@ -134,13 +132,33 @@ class Layer extends Table
             return $schema;
         }
 
-        // Case 3: We are looking for other columns, proceed with the SQL query
-        $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
-        $res = $this->prepare($sql);
-        $this->execute($res);
-        $row = $this->fetchRow($res);
-        return $row[$column];
+        // Case 2: We are looking for a column that only exists in the view
+        $view_columns = ["coord_dimension", "srid", "type", "_key_"];
+        // The same logic applies for _key_ as it is supplied by the user. However by looking for _key_ in the view, we check if the key is still relevant.
+        if (in_array($column, $view_columns)) {
+            // Escape values by doubling single quotes (PostgreSQL string escape)
+            $schemaEsc = str_replace("'", "''", $schema);
+            $tableEsc = str_replace("'", "''", $table);
+            $geomEsc = str_replace("'", "''", $geom);
+            // Escape column identifier by doubling double quotes
+            $columnEsc = str_replace('"', '""', $column);
+            
+            $sql = "SELECT \"$columnEsc\" FROM settings.getColumns('f_table_schema = ''$schemaEsc'' AND f_table_name = ''$tableEsc'' AND f_geometry_column = ''$geomEsc''', 'r_table_schema = ''$schemaEsc'' AND r_table_name = ''$tableEsc'' AND r_raster_column = ''$geomEsc''')";
+            $res = $this->prepare($sql);
+            $this->execute($res);
+            $row = $this->fetchRow($res);
+            return $row[$column] ?? null;
+        }
 
+        // Case 3: We are looking for other columns, proceed with the SQL query
+        $sql = "SELECT :column FROM settings.geometry_columns_join where _key_ = :key";
+        $res = $this->prepare($sql);
+        $this->execute($res, [
+            ':column' => $column,
+            ':key' => $_key_,
+        ]);
+        $row = $this->fetchRow($res);
+        return $row[$column] ?? null;
     }
 
     /**

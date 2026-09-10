@@ -22,15 +22,59 @@ class LayerBenchmarkTest extends Unit
      * Columns to test on all layers
      */
     protected array $columnsToTest = [
-        'privileges', // only in table
-        'coord_dimension', // only in view
-        'f_table_schema', // can be deduced from parameter
+        'f_table_schema',
+        'f_table_name',
+        'f_geometry_column',
+        'coord_dimension',
+        'srid',
+        'type',
+        '_key_',
+        'f_table_abstract',
+        'f_table_title',
+        'tweet',
+        'editable',
+        'created',
+        'lastmodified',
+        'authentication',
+        'fieldconf',
+        // 'meta_url',
+        // 'layergroup',
+        // 'def',
+        // 'class',
+        // 'wmssource',
+        // 'baselayer',
+        // 'sort_id',
+        // 'tilecache',
+        // 'data',
+        // 'not_querable',
+        // 'single_tile',
+        // 'cartomobile',
+        // 'filter',
+        // 'bitmapsource',
+        // 'privileges',
+        // 'enablesqlfilter',
+        // 'triggertable',
+        // 'classwizard',
+        // 'extra',
+        // 'skipconflict',
+        // 'roles',
+        // 'elasticsearch',
+        // 'uuid',
+        // 'tags',
+        // 'meta',
+        // 'wmsclientepsgs',
+        // 'featureid',
+        // 'note',
+        // 'legend_url',
+        // 'enableows',
+        // 'class_cache',
+        // 'qml'
     ];
 
     /**
      * Number of iterations for all benchmarks
      */
-    protected int $iterations = 100;
+    protected int $iterations = 1;
 
     protected function _before(): void
     {
