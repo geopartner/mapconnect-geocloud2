@@ -105,6 +105,18 @@ class LayerBenchmarkTest extends Unit
         // Display results as a table
         $this->tester->printBenchmarkTable($results, $dbLabel, $comment ?: $layerKey);
 
+        // Save results if BENCHMARK_SAVE environment variable is set
+        $saveMode = getenv('BENCHMARK_SAVE');
+        if ($saveMode) {
+            $this->tester->saveResults($results, $saveMode);
+        }
+
+        // Compare results if BENCHMARK_COMPARE environment variable is set
+        $compareMode = getenv('BENCHMARK_COMPARE');
+        if ($compareMode) {
+            $this->tester->compareResults($results, $compareMode);
+        }
+
         $this->assertTrue(true);
     }
 }

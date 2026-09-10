@@ -1,4 +1,4 @@
-<?php  //[STAMP] 618d97ba2dc6d63318a86a2834d62964
+<?php  //[STAMP] ace31d52325755fe2e277b3e83c0f844
 // phpcs:ignoreFile
 namespace _generated;
 
@@ -2080,11 +2080,33 @@ trait BenchmarkTesterActions
      * @param callable $callable The function to benchmark
      * @param int $iterations Number of times to run the function
      * @param mixed ...$args Arguments to pass to the function
-     * @return array {totalMs, averageMs, iterations}
+     * @return array {totalMs, averageMs, iterations, fastest, slowest, p95, first}
      * @see \Helper\Benchmark::benchmarkFunction()
      */
     public function benchmarkFunction(callable $callable, int $iterations = 100, $args = null): array {
         return $this->getScenario()->runStep(new \Codeception\Step\Action('benchmarkFunction', func_get_args()));
+    }
+
+ 
+    /**
+     * [!] Method is generated. Documentation taken from corresponding module.
+     *
+     * Save benchmark results to a JSON file
+     * @see \Helper\Benchmark::saveResults()
+     */
+    public function saveResults(array $results, string $filename): string {
+        return $this->getScenario()->runStep(new \Codeception\Step\Action('saveResults', func_get_args()));
+    }
+
+ 
+    /**
+     * [!] Method is generated. Documentation taken from corresponding module.
+     *
+     * Load and compare benchmark results
+     * @see \Helper\Benchmark::compareResults()
+     */
+    public function compareResults(array $current, string $baselineFilename): void {
+        $this->getScenario()->runStep(new \Codeception\Step\Action('compareResults', func_get_args()));
     }
 
  

@@ -1,0 +1,41 @@
+{
+    "timestamp": "2026-09-10 08:14:46",
+    "results": [
+        {
+            "database": "e2e",
+            "layer": "public.test_flade.the_geom",
+            "column": "privileges",
+            "iterations": 100,
+            "total_ms": 6631.6452,
+            "avg_ms": 66.3165,
+            "fastest": 64.0086,
+            "slowest": 86.8921,
+            "p95": 68.6532,
+            "first": 64.0086
+        },
+        {
+            "database": "e2e",
+            "layer": "public.test_flade.the_geom",
+            "column": "coord_dimension",
+            "iterations": 100,
+            "total_ms": 6720.3682,
+            "avg_ms": 67.2037,
+            "fastest": 64.3406,
+            "slowest": 87.295,
+            "p95": 70.0453,
+            "first": 64.3406
+        },
+        {
+            "database": "e2e",
+            "layer": "public.test_flade.the_geom",
+            "column": "f_table_schema",
+            "iterations": 100,
+            "total_ms": 6639.61,
+            "avg_ms": 66.3961,
+            "fastest": 63.9635,
+            "slowest": 84.1324,
+            "p95": 70.7353,
+            "first": 63.9635
+        }
+    ]
+}

@@ -4,6 +4,8 @@ namespace Helper;
 
 class Benchmark extends \Codeception\Module
 {
+    private string $resultsDir = __DIR__ . '/../_output/benchmarks';
+
     /**
      * Run a function multiple times and return timing statistics
      *
@@ -44,6 +46,128 @@ class Benchmark extends \Codeception\Module
             'p95' => round($p95, 4),
             'first' => round($first, 4),
         ];
+    }
+
+    /**
+     * Save benchmark results to a JSON file
+     */
+    public function saveResults(array $results, string $filename): string
+    {
+        if (!is_dir($this->resultsDir)) {
+            mkdir($this->resultsDir, 0755, true);
+        }
+
+        $filepath = $this->resultsDir . '/' . $filename . '.json';
+        $data = [
+            'timestamp' => date('Y-m-d H:i:s'),
+            'results' => $results,
+        ];
+
+        file_put_contents($filepath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $output = "\n✓ Benchmark results saved to: $filepath\n";
+        fwrite(STDERR, $output);
+
+        return $filepath;
+    }
+
+    /**
+     * Load and compare benchmark results
+     */
+    public function compareResults(array $current, string $baselineFilename): void
+    {
+        $filepath = $this->resultsDir . '/' . $baselineFilename . '.json';
+
+        if (!file_exists($filepath)) {
+            $output = "\n⚠ Baseline file not found: $filepath\n";
+            fwrite(STDERR, $output);
+            return;
+        }
+
+        $baseline = json_decode(file_get_contents($filepath), true);
+        $baselineResults = $baseline['results'] ?? [];
+
+        if (empty($baselineResults)) {
+            $output = "\n⚠ No results in baseline file\n";
+            fwrite(STDERR, $output);
+            return;
+        }
+
+        $output = "\n" . str_repeat("=", 200) . "\n";
+        $output .= "PERFORMANCE COMPARISON: Current vs Baseline\n";
+        $output .= "Baseline timestamp: " . $baseline['timestamp'] . "\n";
+        $output .= str_repeat("=", 200) . "\n";
+
+        $output .= sprintf(
+            "| %-20s | %-12s | %-12s | %-14s | %-12s | %-12s | %-14s | %-10s |\n",
+            "Column",
+            "Baseline Avg",
+            "Current Avg",
+            "Avg Change",
+            "Baseline P95",
+            "Current P95",
+            "P95 Change",
+            "Status"
+        );
+        $output .= str_repeat("-", 200) . "\n";
+
+        $totalDegradation = 0;
+        $totalImprovement = 0;
+
+        foreach ($current as $idx => $row) {
+            $baseline_row = $baselineResults[$idx] ?? null;
+
+            if (!$baseline_row) {
+                $status = "⚠ NEW";
+                $avg_change = "N/A";
+                $p95_change = "N/A";
+                $baseline_avg = "N/A";
+                $baseline_p95 = "N/A";
+            } else {
+                $baseline_avg = sprintf("%.4f", $baseline_row['avg_ms']);
+                $baseline_p95 = sprintf("%.4f", $baseline_row['p95']);
+                
+                $avg_diff = $row['avg_ms'] - $baseline_row['avg_ms'];
+                $avg_change_pct = ($avg_diff / $baseline_row['avg_ms']) * 100;
+                $avg_change = sprintf("%+.2f%% (%+.4f)", $avg_change_pct, $avg_diff);
+
+                $p95_diff = $row['p95'] - $baseline_row['p95'];
+                $p95_change_pct = ($p95_diff / $baseline_row['p95']) * 100;
+                $p95_change = sprintf("%+.2f%% (%+.4f)", $p95_change_pct, $p95_diff);
+
+                if ($avg_change_pct > 5) {
+                    $status = "🔴 SLOWER";
+                    $totalDegradation += $avg_change_pct;
+                } elseif ($avg_change_pct < -5) {
+                    $status = "🟢 FASTER";
+                    $totalImprovement += abs($avg_change_pct);
+                } else {
+                    $status = "🟡 SIMILAR";
+                }
+            }
+
+            $output .= sprintf(
+                "| %-20s | %-12s | %-12.4f | %-14s | %-12s | %-12.4f | %-14s | %-10s |\n",
+                substr($row['column'], 0, 20),
+                $baseline_avg,
+                $row['avg_ms'],
+                $avg_change,
+                $baseline_p95,
+                $row['p95'],
+                $p95_change,
+                $status
+            );
+        }
+
+        $output .= str_repeat("=", 200) . "\n";
+        $output .= sprintf(
+            "Summary: Total Degradation: %.2f%% | Total Improvement: %.2f%%\n",
+            $totalDegradation,
+            $totalImprovement
+        );
+        $output .= str_repeat("=", 200) . "\n\n";
+
+        fwrite(STDERR, $output);
     }
 
     /**
