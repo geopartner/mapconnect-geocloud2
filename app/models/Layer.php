@@ -796,13 +796,29 @@ class Layer extends Table
      */
     public function setPrivilegesOnAll(string $subuser, string $privilege): void
     {
+        // Original version
+        // new User($subuser)->doesUserExist();
+        // $this->clearCacheOnSchemaChanges();
+        // $path = "{" . $subuser . "}";
+        // $privilege = "\"" . $privilege . "\"";
+        // $sql = "update settings.geometry_columns_join set privileges = jsonb_set(privileges, :path, :privilege)";
+        // $res = $this->prepare($sql);
+        // $this->execute($res, ["path" => $path, "privilege" => $privilege]);
+
+        // Updated version using jsonb_build_object and COALESCE to efficiently update privileges
         new User($subuser)->doesUserExist();
+        // Start by clearing the cache on schema changes
         $this->clearCacheOnSchemaChanges();
-        $path = "{" . $subuser . "}";
-        $privilege = "\"" . $privilege . "\"";
-        $sql = "update settings.geometry_columns_join set privileges = jsonb_set(privileges, :path, :privilege)";
+
+        // Execute the SQL to update privileges for the specified subuser, but skip writing to the layers that doesnt have to be modified
+        $sql = "
+            UPDATE settings.geometry_columns_join 
+            SET privileges = COALESCE(privileges, '{}'::jsonb) || jsonb_build_object(:subuser, :privilege) 
+            WHERE privileges->>:subuser IS DISTINCT FROM :privilege;
+        ";
+        
         $res = $this->prepare($sql);
-        $this->execute($res, ["path" => $path, "privilege" => $privilege]);
+        $this->execute($res, ["subuser" => $subuser, "privilege" => $privilege]);
     }
 
     /**
