@@ -548,7 +548,7 @@ class Table extends Model
                         }
                     } 
                     // We need to make sure some keys are not URL-encoded when they are written to the database.
-                    if (in_array($key, ["data", "meta_url", "wmssource", "wmsclientepsgs", "bitmapsource", "note"])) {
+                    if (in_array($key, ["data", "meta_url", "wmssource", "wmsclientepsgs", "bitmapsource", "note", "legend_url"])) {
                         $value = urldecode($value);
                     }
                     
