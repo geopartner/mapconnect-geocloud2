@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -545,7 +546,13 @@ class Table extends Model
                             }
                             $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
-                    } else {
+                    } 
+                    // We need to make sure some keys are not URL-encoded when they are written to the database.
+                    if (in_array($key, ["data", "meta_url", "wmssource", "wmsclientepsgs", "bitmapsource", "note"])) {
+                        $value = urldecode($value);
+                    }
+                    
+                    else {
                         if (is_object($value) || is_array($value)) {
                             $value = json_encode($value, JSON_UNESCAPED_UNICODE);
                         }
