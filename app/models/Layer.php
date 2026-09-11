@@ -136,6 +136,7 @@ class Layer extends Table
         // Case 2: We are looking for a column that only exists in the view
         $view_columns = ["coord_dimension", "srid", "type", "_key_"]; // _key_ is added to the list in order to check for relevancy.
         if (in_array($column, $view_columns)) {
+            
             // Escape values by doubling single quotes (PostgreSQL string escape)
             $schemaEsc = str_replace("'", "''", $schema);
             $tableEsc = str_replace("'", "''", $table);
@@ -146,17 +147,19 @@ class Layer extends Table
             $sql = "SELECT \"$columnEsc\" FROM settings.getColumns('f_table_schema = ''$schemaEsc'' AND f_table_name = ''$tableEsc'' AND f_geometry_column = ''$geomEsc''', 'r_table_schema = ''$schemaEsc'' AND r_table_name = ''$tableEsc'' AND r_raster_column = ''$geomEsc''')";
             $res = $this->prepare($sql);
             $this->execute($res);
-            $row = $this->fetchRow($res);
-            return $row[$column] ?? null;
+            
+        } else {
+
+            // Case 3: We are looking for columns that exist in the table, lets look in that instead. Only get the specific column requested.
+            $sql = "SELECT :column FROM settings.geometry_columns_join where _key_ = :key";
+            $res = $this->prepare($sql);
+            $this->execute($res, [
+                ':column' => $column,
+                ':key' => $_key_,
+            ]);
+
         }
 
-        // Case 3: We are looking for columns that exist in the table, lets look in that instead. Only get the specific column requested.
-        $sql = "SELECT :column FROM settings.geometry_columns_join where _key_ = :key";
-        $res = $this->prepare($sql);
-        $this->execute($res, [
-            ':column' => $column,
-            ':key' => $_key_,
-        ]);
         $row = $this->fetchRow($res);
         return $row[$column] ?? null;
     }
@@ -728,6 +731,17 @@ class Layer extends Table
                 $arr[] = $key;
             }
         }
+
+        // Filter out keys that contain "@", since they are from Keycloak and not relevant for local privileges
+        $filtered = [];
+        foreach ($arr as $subuser) {
+            if (!str_contains($subuser, '@')) {
+                $filtered[] = $subuser;
+            }
+        }
+        $arr = $filtered;
+
+
         foreach ($arr as $subuser) {
             $privileges->$subuser = $privileges->$subuser ?? "none";
             if ($subuser != $this->schema) {
