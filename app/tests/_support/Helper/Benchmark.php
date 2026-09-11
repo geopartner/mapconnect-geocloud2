@@ -98,17 +98,38 @@ class Benchmark extends \Codeception\Module
         $output .= "Baseline timestamp: " . $baseline['timestamp'] . "\n";
         $output .= str_repeat("=", 200) . "\n";
 
-        $output .= sprintf(
-            "| %-20s | %-12s | %-12s | %-14s | %-12s | %-12s | %-14s | %-10s |\n",
-            "Column",
-            "Baseline Avg",
-            "Current Avg",
-            "Avg Change",
-            "Baseline P95",
-            "Current P95",
-            "P95 Change",
-            "Status"
-        );
+        // Determine the type of results
+        $firstResult = $current[0] ?? null;
+        $isGetValueFromKey = isset($firstResult['column']);
+
+        if ($isGetValueFromKey) {
+            // Table header for getValueFromKey
+            $output .= sprintf(
+                "| %-20s | %-12s | %-12s | %-14s | %-12s | %-12s | %-14s | %-10s |\n",
+                "Column",
+                "Baseline Avg",
+                "Current Avg",
+                "Avg Change",
+                "Baseline P95",
+                "Current P95",
+                "P95 Change",
+                "Status"
+            );
+        } else {
+            // Table header for setPrivilegesOnAll
+            $output .= sprintf(
+                "| %-20s | %-15s | %-12s | %-12s | %-14s | %-12s | %-12s | %-14s | %-10s |\n",
+                "Subuser",
+                "Privilege",
+                "Baseline Avg",
+                "Current Avg",
+                "Avg Change",
+                "Baseline P95",
+                "Current P95",
+                "P95 Change",
+                "Status"
+            );
+        }
         $output .= str_repeat("-", 200) . "\n";
 
         $totalDegradation = 0;
@@ -146,17 +167,32 @@ class Benchmark extends \Codeception\Module
                 }
             }
 
-            $output .= sprintf(
-                "| %-20s | %-12s | %-12.4f | %-14s | %-12s | %-12.4f | %-14s | %-10s |\n",
-                substr($row['column'], 0, 20),
-                $baseline_avg,
-                $row['avg_ms'],
-                $avg_change,
-                $baseline_p95,
-                $row['p95'],
-                $p95_change,
-                $status
-            );
+            if ($isGetValueFromKey) {
+                $output .= sprintf(
+                    "| %-20s | %-12s | %-12.4f | %-14s | %-12s | %-12.4f | %-14s | %-10s |\n",
+                    substr($row['column'], 0, 20),
+                    $baseline_avg,
+                    $row['avg_ms'],
+                    $avg_change,
+                    $baseline_p95,
+                    $row['p95'],
+                    $p95_change,
+                    $status
+                );
+            } else {
+                $output .= sprintf(
+                    "| %-20s | %-15s | %-12s | %-12.4f | %-14s | %-12s | %-12.4f | %-14s | %-10s |\n",
+                    substr($row['subuser'], 0, 20),
+                    substr($row['privilege'], 0, 15),
+                    $baseline_avg,
+                    $row['avg_ms'],
+                    $avg_change,
+                    $baseline_p95,
+                    $row['p95'],
+                    $p95_change,
+                    $status
+                );
+            }
         }
 
         $output .= str_repeat("=", 200) . "\n";
@@ -175,38 +211,77 @@ class Benchmark extends \Codeception\Module
      */
     public function printBenchmarkTable(array $results, string $database, string $layer): void
     {
+        if (empty($results)) {
+            return;
+        }
+
         $output = "\n";
         $output .= str_repeat("=", 140) . "\n";
         $output .= "Database: $database | Layer: $layer\n";
         $output .= str_repeat("=", 140) . "\n";
         
-        // Table header
-        $output .= sprintf(
-            "| %-25s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s |\n",
-            "Column",
-            "Avg (ms)",
-            "First (ms)",
-            "P95 (ms)",
-            "Fastest (ms)",
-            "Slowest (ms)",
-            "Total (ms)",
-            "Iterations"
-        );
-        $output .= str_repeat("-", 140) . "\n";
+        // Determine the type of results (getValueFromKey vs setPrivilegesOnAll)
+        $firstResult = $results[0];
+        $isGetValueFromKey = isset($firstResult['column']);
         
-        // Table rows
-        foreach ($results as $row) {
+        if ($isGetValueFromKey) {
+            // Table header for getValueFromKey
             $output .= sprintf(
-                "| %-25s | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10d |\n",
-                substr($row['column'], 0, 25),
-                $row['avg_ms'],
-                $row['first'],
-                $row['p95'],
-                $row['fastest'],
-                $row['slowest'],
-                $row['total_ms'],
-                $row['iterations']
+                "| %-25s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s |\n",
+                "Column",
+                "Avg (ms)",
+                "First (ms)",
+                "P95 (ms)",
+                "Fastest (ms)",
+                "Slowest (ms)",
+                "Total (ms)",
+                "Iterations"
             );
+            $output .= str_repeat("-", 140) . "\n";
+            
+            // Table rows
+            foreach ($results as $row) {
+                $output .= sprintf(
+                    "| %-25s | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10d |\n",
+                    substr($row['column'], 0, 25),
+                    $row['avg_ms'],
+                    $row['first'],
+                    $row['p95'],
+                    $row['fastest'],
+                    $row['slowest'],
+                    $row['total_ms'],
+                    $row['iterations']
+                );
+            }
+        } else {
+            // Table header for setPrivilegesOnAll
+            $output .= sprintf(
+                "| %-20s | %-15s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s |\n",
+                "Subuser",
+                "Privilege",
+                "Avg (ms)",
+                "First (ms)",
+                "P95 (ms)",
+                "Fastest (ms)",
+                "Slowest (ms)",
+                "Iterations"
+            );
+            $output .= str_repeat("-", 140) . "\n";
+            
+            // Table rows
+            foreach ($results as $row) {
+                $output .= sprintf(
+                    "| %-20s | %-15s | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10.4f | %-10d |\n",
+                    substr($row['subuser'], 0, 20),
+                    substr($row['privilege'], 0, 15),
+                    $row['avg_ms'],
+                    $row['first'],
+                    $row['p95'],
+                    $row['fastest'],
+                    $row['slowest'],
+                    $row['iterations']
+                );
+            }
         }
         
         $output .= str_repeat("=", 140) . "\n\n";

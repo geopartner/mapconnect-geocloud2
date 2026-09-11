@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2026 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -547,12 +548,13 @@ class Sql extends Model
             $this->execQuery("CLOSE curs");
             $csv = implode("\n", $lines);
 
+            // Add BOM for UTF-8 to ensure proper encoding in Excel and other programs
             if ($format == "csv") {
-                header("Content-Type: text/csv");
+                header("Content-Type: text/csv; charset=utf-8");
                 header('Content-Disposition: attachment; filename="file.csv"');
                 ob_clean();
                 flush();
-                echo $csv;
+                echo "\xEF\xBB\xBF" . $csv;
                 return [];
             }
 

@@ -424,6 +424,11 @@ final class ClaimAcl
             return true;
         }
 
+        // If claim is a ,-seperated string, convert to an array
+        if (is_string($val) && strpos($val, ',') !== false) {
+            $val = array_map('trim', explode(',', $val));
+        }
+
         // Array claim (typical Keycloak groups / roles / org arrays)
         if (is_array($val)) {
             // exact membership
