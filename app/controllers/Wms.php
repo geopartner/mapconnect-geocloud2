@@ -2,6 +2,7 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
+ * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -314,6 +315,12 @@ class Wms extends Controller
                     $mergedQuery['BBOX'] = $query['BBOX'];
                     $mergedQuery['WIDTH'] = $query['WIDTH'];
                     $mergedQuery['HEIGHT'] = $query['HEIGHT'];
+
+                    // If the source hostname is api.dataforsyningen.dk, make sure the TRANSPARENT parameter is uppercase
+                    if (isset($source['host']) && $source['host'] === 'api.dataforsyningen.dk' && isset($query['TRANSPARENT'])) {
+                        $mergedQuery['TRANSPARENT'] = strtoupper($mergedQuery['TRANSPARENT']);
+                    }
+
                     // Set SRS or CRS (WMS version 1.1.0 and 1.3.0) Version is taken from the source
                     $bits = explode('.', $source['query']['VERSION']);
                     if ((int)$bits[1] < 3) {

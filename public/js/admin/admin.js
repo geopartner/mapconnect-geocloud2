@@ -5086,6 +5086,9 @@ $(document).ready(function () {
 /**
  * Setup checks for session and schema in session
  */
+
+// This creates alot of unwanted traffic from the browser to the server, as it checks the session every 2 seconds.
+// Because of scaling, we have some bad-gateway issues if we check too frequently, alså remove the generic error alert.
 setInterval(function () {
     $.ajax({
         url: '/api/v2/session',
@@ -5100,10 +5103,10 @@ setInterval(function () {
             }
         },
         error: function () {
-            alert("Noget gik galt. Prøv at refreshe din browser");
+            //alert("Noget gik galt. Prøv at refreshe din browser");
         }
     });
-}, 2000);
+}, 10000);
 
 
 function startWfsEdition(layerName, geomField, wfsFilter, single, timeSlice) {
