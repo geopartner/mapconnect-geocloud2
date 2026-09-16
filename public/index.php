@@ -128,9 +128,16 @@ function setHeaders(): void
     } elseif (isset(App::$param["AccessControlAllowOrigin"]) && App::$param["AccessControlAllowOrigin"][0] == "*") {
         header("Access-Control-Allow-Origin: *");
     }
+
     header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control");
     header("Access-Control-Allow-Credentials: true");
     header("Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS");
+
+    // Passthrough OPTIONS for CORS preflight requests
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        header("Access-Control-Max-Age: 86400");
+        exit(0);
+    }
 }
 
 // Setup host
