@@ -153,8 +153,11 @@ class Processvector extends Controller
             // =============================
             ($format == "csv" ? "-oo X_POSSIBLE_NAMES=lon*,Lon*,x,X -oo Y_POSSIBLE_NAMES=lat*,Lat*,y,Y -oo AUTODETECT_TYPE=YES -oo GEOM_POSSIBLE_NAMES=geometri " : '') .
 
-            //"-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . "  user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . Connection::$param["postgisdb"] . " options=\'-c SET SERVER ROLE TO primary\'' " .
-            "-f 'PostgreSQL' PG:'host=pgbouncer port=5432  user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . Connection::$param["postgisdb"] . "' " .
+            // Use pgbouncer if USE_PGBOUNCER env is set, otherwise use direct connection
+            (Connection::$param["pgbouncer"] === 'true' 
+                ? "-f 'PostgreSQL' PG:'host=pgbouncer port=5432  user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . Connection::$param["postgisdb"] . "' "
+                : "-f 'PostgreSQL' PG:'host=" . Connection::$param["postgishost"] . " port=" . Connection::$param["postgisport"] . "  user=" . Connection::$param["postgisuser"] . " password=" . Connection::$param["postgispw"] . " dbname=" . Connection::$param["postgisdb"] . "' ") .
+            
             "'" . $dir . "/" . $fileName . "' " .
             "-nln " . Connection::$param["postgisschema"] . ".$safeName -nlt $type";
 
