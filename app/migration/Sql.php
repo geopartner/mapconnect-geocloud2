@@ -1,8 +1,7 @@
 <?php
 /**
- * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2025 MapCentia ApS
- * @copyright  2026-     MapCentia ApS
+ * @author     Martin Høgh <mh@mapcentia.com>, Rene Borella <rgb@mapster.dk>
+ * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -215,6 +214,8 @@ class Sql
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                     )";
         $sqls[] = "ALTER TABLE settings.geometry_columns_join ADD COLUMN qml TEXT";
+        $sqls[] = "ALTER TABLE settings.key_value ADD COLUMN owner VARCHAR(256)";
+        $sqls[] = "ALTER TABLE settings.key_value ADD COLUMN public BOOLEAN DEFAULT FALSE";
         $sqls[] = "DROP VIEW non_postgis_matviews CASCADE";
         $sqls[] = "CREATE VIEW non_postgis_matviews AS
                     SELECT
@@ -315,6 +316,130 @@ SQL;
         $sqls[] = "DROP TRIGGER IF EXISTS geometry_columns_join_history_tr ON settings.geometry_columns_join";
         $sqls[] = "CREATE TRIGGER geometry_columns_join_history_tr AFTER INSERT OR UPDATE OR DELETE ON settings.geometry_columns_join FOR EACH ROW EXECUTE FUNCTION settings.history_trigger()";
 
+        // --- Lambda-like functions (gVisor runtime) ---
+        $sqls[] = "CREATE TABLE settings.functions
+                    (
+                      uuid          UUID                      NOT NULL  DEFAULT uuid_generate_v4()  PRIMARY KEY,
+                      name          CHARACTER VARYING(255)    NOT NULL,
+                      runtime       CHARACTER VARYING(64)     NOT NULL,
+                      handler       CHARACTER VARYING(255)    NOT NULL,
+                      code          TEXT                      NOT NULL,
+                      code_sha      CHARACTER VARYING(64)     NOT NULL,
+                      env           JSONB,
+                      memory_mb     INTEGER                   NOT NULL  DEFAULT 128,
+                      timeout_s     INTEGER                   NOT NULL  DEFAULT 30,
+                      triggers      JSONB,
+                      input_schema  JSONB,
+                      output_schema JSONB,
+                      version       INTEGER                   NOT NULL  DEFAULT 1,
+                      username      CHARACTER VARYING(255),
+                      created       TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT now(),
+                      updated       TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT now(),
+                      CONSTRAINT functions_name_unique UNIQUE (name)
+                    )";
+        $sqls[] = "CREATE TABLE settings.function_invocations
+                    (
+                      uuid          UUID                      NOT NULL  DEFAULT uuid_generate_v4()  PRIMARY KEY,
+                      function_name CHARACTER VARYING(255)    NOT NULL,
+                      status        CHARACTER VARYING(32)     NOT NULL  DEFAULT 'pending',
+                      request       JSONB,
+                      response      JSONB,
+                      logs          TEXT,
+                      error         TEXT,
+                      duration_ms   INTEGER,
+                      username      CHARACTER VARYING(255),
+                      created       TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT now(),
+                      finished      TIMESTAMP WITH TIME ZONE,
+                      CHECK (status IN ('pending', 'running', 'succeeded', 'failed'))
+                    )";
+        $sqls[] = "CREATE INDEX function_invocations_function_name_idx ON settings.function_invocations (function_name)";
+        // Async invocations (Phase 2): queue via the table itself.
+        $sqls[] = "ALTER TABLE settings.function_invocations ADD COLUMN invocation_type VARCHAR(16) NOT NULL DEFAULT 'sync'";
+        $sqls[] = "ALTER TABLE settings.function_invocations ADD COLUMN context JSONB";
+        $sqls[] = "CREATE INDEX function_invocations_pending_idx ON settings.function_invocations (created) WHERE status = 'pending' AND invocation_type = 'async'";
+        // Triggers (Phase 3): owner identity for system-triggered runs + schedule bookkeeping.
+        $sqls[] = "ALTER TABLE settings.functions ADD COLUMN owner_context JSONB";
+        $sqls[] = "ALTER TABLE settings.functions ADD COLUMN last_scheduled_at TIMESTAMP WITH TIME ZONE";
+
+        // Multi-file bundles: 'inline' (code column is source) or 'zip' (code is a base64 zip).
+        $sqls[] = "ALTER TABLE settings.functions ADD COLUMN package VARCHAR(16) NOT NULL DEFAULT 'inline'";
+
+        // DB-event triggers: a durable queue (owned by function_event_dispatcher,
+        // separate from settings.outbox which the realtime listener drains) plus a
+        // trigger function that writes row changes to it.
+        $sqls[] = "CREATE TABLE settings.function_event_queue
+                    (
+                      id          BIGSERIAL PRIMARY KEY,
+                      op          CHAR(1)   NOT NULL CHECK (op IN ('I', 'U', 'D')),
+                      schema_name TEXT      NOT NULL,
+                      table_name  TEXT      NOT NULL,
+                      pk_column   TEXT      NOT NULL,
+                      pk_value    TEXT      NOT NULL,
+                      payload     JSONB,
+                      created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                    )";
+        $sqls[] = <<<'SQL'
+CREATE OR REPLACE FUNCTION _gc2_function_event() RETURNS TRIGGER AS $$
+DECLARE
+  t text;
+  snap jsonb;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    EXECUTE 'SELECT $1.' || TG_ARGV[0] USING OLD INTO t;
+    snap := row_to_json(OLD)::jsonb;
+  ELSE
+    EXECUTE 'SELECT $1.' || TG_ARGV[0] USING NEW INTO t;
+    snap := row_to_json(NEW)::jsonb;
+  END IF;
+  INSERT INTO settings.function_event_queue (op, schema_name, table_name, pk_column, pk_value, payload)
+  VALUES (left(TG_OP, 1), TG_ARGV[1], TG_ARGV[2], TG_ARGV[0], t, snap);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+SQL;
+
+        // Snapshots: async export of a relation to Parquet on S3 (see
+        // app/inc/SnapshotWorker.php). The table is the queue.
+        $sqls[] = "CREATE TABLE settings.snapshots
+                    (
+                      uuid          UUID                      NOT NULL  DEFAULT uuid_generate_v4()  PRIMARY KEY,
+                      schema_name   TEXT                      NOT NULL,
+                      relation_name TEXT                      NOT NULL,
+                      srs           INTEGER,
+                      status        CHARACTER VARYING(32)     NOT NULL  DEFAULT 'pending',
+                      s3_path       TEXT,
+                      row_count     BIGINT,
+                      error         TEXT,
+                      username      CHARACTER VARYING(255),
+                      created       TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT now(),
+                      started       TIMESTAMP WITH TIME ZONE,
+                      finished      TIMESTAMP WITH TIME ZONE,
+                      CHECK (status IN ('pending', 'running', 'succeeded', 'failed'))
+                    )";
+        $sqls[] = "CREATE INDEX snapshots_pending_idx ON settings.snapshots (created) WHERE status = 'pending'";
+        $sqls[] = "CREATE INDEX snapshots_relation_idx ON settings.snapshots (schema_name, relation_name)";
+        // Column shape of the relation at snapshot time: a fingerprint and the
+        // column list itself (name + type), mirrored in metadata.json on S3.
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN schema_version TEXT";
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN relation_schema JSONB";
+        // Read side of snapshots: the catalog identifies a snapshot by relation +
+        // date, remembers its files, and only shows published rows.
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN snapshot_date DATE";
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN files JSONB";
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN size_bytes BIGINT";
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN published TIMESTAMP WITH TIME ZONE";
+        // WGS84 footprint of the relation at snapshot time ([minx,miny,maxx,maxy]
+        // or null), the geometry of the snapshot's STAC Item.
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN IF NOT EXISTS bbox JSONB";
+        // Output formats of the snapshot: the requested format ids while the row
+        // waits, the per-format result (produced with file/size/media type, or
+        // skipped with a reason) once it is published. A row from before this
+        // column is described by its files instead.
+        $sqls[] = "ALTER TABLE settings.snapshots ADD COLUMN IF NOT EXISTS formats JSONB";
+        $sqls[] = "ALTER TABLE settings.snapshots DROP CONSTRAINT snapshots_status_check";
+        $sqls[] = "ALTER TABLE settings.snapshots ADD CONSTRAINT snapshots_status_check CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'superseded'))";
+        $sqls[] = "CREATE UNIQUE INDEX snapshots_published_unique_idx ON settings.snapshots (schema_name, relation_name, snapshot_date) WHERE status = 'succeeded'";
+
         include 'Views1.php';
         return $sqls;
     }
@@ -345,6 +470,13 @@ SQL;
         $sqls[] = "ALTER TABLE users ADD CONSTRAINT email_unique_for_parent UNIQUE  (parentdb, email)";
         $sqls[] = "ALTER TABLE public.users ALTER COLUMN email SET NOT NULL";
         $sqls[] = "ALTER TABLE users ADD COLUMN private_properties JSONB";
+        $sqls[] = "ALTER TABLE users ALTER COLUMN usergroup TYPE jsonb
+                        USING CASE
+                            WHEN usergroup IS NULL THEN NULL
+                            WHEN usergroup ~ '^\s*\[.*\]\s*$' THEN usergroup::jsonb
+                            ELSE jsonb_build_array(usergroup)
+                        END";
+//        $sqls[] = "ALTER TABLE users ALTER COLUMN usergroup TYPE varchar USING usergroup->>0";
 
         return $sqls;
     }
@@ -362,6 +494,9 @@ SQL;
         $sqls[] = "ALTER TABLE jobs ADD COLUMN download_schema BOOL DEFAULT TRUE";
         $sqls[] = "ALTER TABLE jobs ADD COLUMN report jsonb";
         $sqls[] = "ALTER TABLE jobs ADD COLUMN active BOOL DEFAULT TRUE";
+        $sqls[] = "ALTER TABLE jobs ADD COLUMN snapshot BOOL DEFAULT FALSE";
+        // Per-job snapshot formats; NULL means the server default (snapshot.formats in App.php).
+        $sqls[] = "ALTER TABLE jobs ADD COLUMN snapshot_formats JSONB";
         $sqls[] = "CREATE EXTENSION \"uuid-ossp\"";
         $sqls[] = "create table public.started_jobs
                     (
@@ -373,6 +508,28 @@ SQL;
                         name    varchar(255)
                     );
                   ";
+        // Scheduler run registry: started_jobs gains lifecycle columns; locks
+        // themselves are Postgres advisory locks (see app/inc/SchedulerLock.php).
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN heartbeat TIMESTAMP WITH TIME ZONE";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN finished_at TIMESTAMP WITH TIME ZONE";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'running'";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN host VARCHAR(255)";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN slot INTEGER";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN exit_reason TEXT";
+        $sqls[] = "ALTER TABLE started_jobs ADD COLUMN log TEXT";
+        // The ADD COLUMN above defaults every pre-existing row's started_at to
+        // the moment the migration ran; `created` holds the real value.
+        // Idempotent: on a second run no row matches.
+        $sqls[] = "UPDATE started_jobs SET started_at = created WHERE created IS NOT NULL AND created < started_at - interval '1 minute'";
+        // Rows that predate the registry can never be reaped honestly (no
+        // heartbeat, no lock); retire them instead of leaving them 'running'.
+        $sqls[] = "UPDATE started_jobs SET status = 'lost', finished_at = created, exit_reason = 'row predates the run registry' WHERE status = 'running' AND heartbeat IS NULL AND created IS NOT NULL AND created < now() - interval '1 day'";
+        $sqls[] = "ALTER TABLE started_jobs ADD CONSTRAINT started_jobs_status_check CHECK (status IN ('running', 'succeeded', 'failed', 'skipped', 'lost'))";
+        $sqls[] = "CREATE INDEX started_jobs_running_idx ON started_jobs (id) WHERE status = 'running'";
+        // The listing branch of runsFor() and the retention delete both order
+        // by started_at within one database.
+        $sqls[] = "CREATE INDEX IF NOT EXISTS started_jobs_db_started_idx ON started_jobs (db, started_at DESC)";
         return $sqls;
     }
 }

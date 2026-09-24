@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -77,7 +76,7 @@ class Wms extends Controller
                 foreach ($this->layers as $layer) {
                     // Strip name space if any
                     $layer = sizeof(explode(":", $layer)) > 1 ? explode(":", $layer)[1] : $layer;
-                    $this->basicHttpAuthLayer($layer, $db);
+                    $this->basicHttpAuthLayer($layer);
                 }
             }
             try {
@@ -101,7 +100,7 @@ class Wms extends Controller
                     $this->layers[] = $layer;
                     // If IP not trusted, when check auth on layer
                     if (!$trusted) {
-                        $this->basicHttpAuthLayer($layer, $db);
+                        $this->basicHttpAuthLayer($layer);
                     }
                 }
                 if (!empty($query->attributes()['typeNames'][0])) {
@@ -112,7 +111,7 @@ class Wms extends Controller
                         $this->layers[] = $layer;
                         // If IP not trusted, when check auth on layer
                         if (!$trusted) {
-                            $this->basicHttpAuthLayer($layer, $db);
+                            $this->basicHttpAuthLayer($layer);
                         }
                     }
                 }
@@ -288,9 +287,9 @@ class Wms extends Controller
                 }
                 if ($disableLabels) {
                     $useFilters = true;
-                    $sedCmd = 'sed -i "/#START_LABEL1_' . $split[0] . '.' . $split[1] . '/,/#END_LABEL1_' . $split[0] . '.' . $split[1] . '/c\ " ' . $tmpMapFile;
-                    shell_exec($sedCmd);
-                    $sedCmd = 'sed -i "/#START_LABEL2_' . $split[0] . '.' . $split[1] . '/,/#END_LABEL2_' . $split[0] . '.' . $split[1] . '/c\ " ' . $tmpMapFile;
+                    // Strip every numbered label block (#START_LABEL<n>_… to #END_LABEL<n>_…) for the layer.
+                    // The [0-9]* covers any label count, including old mapfiles with only LABEL1/LABEL2.
+                    $sedCmd = 'sed -i "/#START_LABEL[0-9]*_' . $split[0] . '.' . $split[1] . '/,/#END_LABEL[0-9]*_' . $split[0] . '.' . $split[1] . '/c\ " ' . $tmpMapFile;
                     shell_exec($sedCmd);
                 }
                 $url = "http://127.0.0.1/cgi-bin/mapserv.fcgi?map=$tmpMapFile&{$_SERVER["QUERY_STRING"]}";
@@ -315,12 +314,6 @@ class Wms extends Controller
                     $mergedQuery['BBOX'] = $query['BBOX'];
                     $mergedQuery['WIDTH'] = $query['WIDTH'];
                     $mergedQuery['HEIGHT'] = $query['HEIGHT'];
-
-                    // If the source hostname is api.dataforsyningen.dk, make sure the TRANSPARENT parameter is uppercase
-                    if (isset($source['host']) && $source['host'] === 'api.dataforsyningen.dk' && isset($query['TRANSPARENT'])) {
-                        $mergedQuery['TRANSPARENT'] = strtoupper($mergedQuery['TRANSPARENT']);
-                    }
-
                     // Set SRS or CRS (WMS version 1.1.0 and 1.3.0) Version is taken from the source
                     $bits = explode('.', $source['query']['VERSION']);
                     if ((int)$bits[1] < 3) {

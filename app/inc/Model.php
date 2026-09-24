@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2023 MapCentia ApS
- * @copyright  2026      Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -23,6 +22,7 @@ use PDOException;
 use PDOStatement;
 use PgSql\Result;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
+use Throwable;
 use TypeError;
 
 
@@ -229,14 +229,14 @@ class Model
      * @param array $params An optional array of parameters to bind to the statement during execution.
      *
      * @return bool Always returns true if the statement executes successfully.
-     * @throws \Throwable If the statement execution fails, the exception is rethrown and the transaction (if active) is rolled back when $autoRollback is true.
+     * @throws Throwable If the statement execution fails, the exception is rethrown and the transaction (if active) is rolled back when $autoRollback is true.
      *
      */
     public function execute(PDOStatement $statement, array $params = [], bool $autoRollback = true): true
     {
         try {
             $statement->execute(empty($params) ? null : $params);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if ($autoRollback) {
                 $this->rollback();
             }
@@ -279,7 +279,7 @@ class Model
      * @template T
      * @param callable(): T $work
      * @return T
-     * @throws \Throwable
+     * @throws Throwable
      */
     public function withTransaction(callable $work): mixed
     {
@@ -288,7 +288,7 @@ class Model
             $result = $work();
             $this->commit();
             return $result;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->rollback();
             throw $e;
         }
@@ -312,7 +312,7 @@ class Model
      * @template T
      * @param callable(): T $work
      * @return T
-     * @throws \Throwable
+     * @throws Throwable
      */
     public function withRollback(callable $work): mixed
     {
@@ -327,7 +327,7 @@ class Model
                 try {
                     $pdo->exec("ROLLBACK TO SAVEPOINT $name");
                     $pdo->exec("RELEASE SAVEPOINT $name");
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     error_log("withRollback savepoint cleanup failed: " . $e->getMessage());
                 }
             }
@@ -358,7 +358,7 @@ class Model
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 error_log("rollbackAllOpenTransactions: " . $e->getMessage());
             }
         }
@@ -390,7 +390,7 @@ class Model
                     $pdo->rollBack();
                 }
                 $pdo->exec('DISCARD ALL');
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 error_log("resetSessionStateAllConnections: " . $e->getMessage());
             }
         }
@@ -402,7 +402,7 @@ class Model
      * @param string $sql The SQL query to prepare.
      *
      * @return PDOStatement The prepared PDO statement.
-     * @throws \Throwable If an error occurs while preparing the statement.
+     * @throws Throwable If an error occurs while preparing the statement.
      */
     public function prepare(string $sql): PDOStatement
     {
@@ -410,7 +410,7 @@ class Model
         $this->getPdoConnection()->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         try {
             return $this->getPdoConnection()->prepare($sql);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->rollback();
             throw $e;
         }
@@ -451,7 +451,7 @@ class Model
                             // Return integer
                             $result = $this->getPdoConnection()->exec($query);
                     }
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $this->rollBack();
                     throw $e;
                 }
@@ -501,6 +501,7 @@ class Model
      * @return array
      * @throws GC2Exception
      * @throws PhpfastcacheInvalidArgumentException
+     * @throws Throwable
      */
     public function getMetaData(string $table, bool $temp = false, bool $restriction = true, ?array $restrictions = null, ?string $cacheKey = null, bool $getEnums = true, bool $lookupForeignTables = true): array
     {
@@ -633,6 +634,8 @@ class Model
                         }
                         if (!empty($rel->_order)) {
                             $sql .= " ORDER BY $rel->_order";
+                        } else {
+                            $sql .= " ORDER BY $rel->_value";
                         }
                         // We ignore the error here
                         try {
@@ -729,12 +732,33 @@ class Model
      */
     public function connectString(): string
     {
-        $connectString = "host=" . $this->connection->host;
-        $connectString .= " port=" . $this->connection->port;
-        $connectString .= " user=" . $this->connection->user;
-        $connectString .= " password=" . $this->connection->password;
-        $connectString .= " dbname=" . $this->connection->database;
+        return self::connectStringFor($this->connection);
+    }
+
+    /**
+     * The libpq connection string for a Connection. Also the key under which
+     * the shared PDO instance for that database is cached.
+     */
+    public static function connectStringFor(Connection $connection): string
+    {
+        $connectString = "host=" . $connection->host;
+        $connectString .= " port=" . $connection->port;
+        $connectString .= " user=" . $connection->user;
+        $connectString .= " password=" . $connection->password;
+        $connectString .= " dbname=" . $connection->database;
         return $connectString;
+    }
+
+    /**
+     * Drops the cached PDO connection for a Connection so the socket is
+     * released. The PDO cache is static and keyed per database, so a CLI
+     * script that loops over every database would otherwise keep one open
+     * connection per database for the lifetime of the process. The next
+     * Model that needs the database reconnects transparently.
+     */
+    public static function disconnect(Connection $connection): void
+    {
+        unset(self::$PdoConnections[self::connectStringFor($connection)]);
     }
 
     /**
@@ -755,10 +779,13 @@ class Model
                 break;
             case "PDO" :
                 if (empty($this->getPdoConnection()) || !$this->isPdoConnected()) {
-                    // Shh
-                    //error_log("Connecting to " . $this->connection->database . " on " . $this->connection->host . " as " . $this->connection->user);
-                    $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port}", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
-                    $this->execQuery("set client_encoding='UTF8'");
+                    // client_encoding is passed as a libpq connection parameter rather than a
+                    // loose "SET client_encoding" after connect. A post-connect SET runs as its
+                    // own autocommit statement and, under PgBouncer transaction pooling, is not
+                    // guaranteed to stick to the backend that later serves a transaction.
+                    // client_encoding is one of the startup parameters PgBouncer tracks natively,
+                    // so setting it on the connection string is both pool-safe and per-session correct.
+                    $this->setPdoConnection(new PDO(dsn: "pgsql:dbname={$this->connection->database};host={$this->connection->host};port={$this->connection->port};client_encoding=UTF8", username: $this->connection->user, password: $this->connection->password, options: [PDO::ATTR_EMULATE_PREPARES => true]));
                 }
                 break;
         }
@@ -830,67 +857,75 @@ class Model
      */
     function getGeometryColumns(string $table, string $field): mixed
     {
-        $response = [];
-
-        $_schema = sizeof(explode(".", $table)) > 1 ? explode(".", $table)[0] : "";
-
-        $_table = sizeof(explode(".", $table)) > 1 ? explode(".", $table)[1] : $table;
-
-        if (!$_schema) {
-            $_schema = $this->postgisschema ?: "";
+        $cacheType = "geometryColumns";
+        $cacheRel = md5($table . '_' . $field);
+        $cacheId = $this->connection->database . "_" . $cacheRel . "_" . $cacheType;
+        $CachedString = Cache::getItem($cacheId);
+        if ($CachedString != null && $CachedString->isHit()) {
+            return $CachedString->get();
         } else {
-            $_schema = str_replace(".", "", $_schema);
-        }
-
-        $row = $this->getColumns($_schema, $_table)[0] ?? null;
-
-        if (!$row) {
-            return null;
-        } else {
-            $this->theGeometry = $row['type'];
-        }
-        if ($field == 'f_geometry_column') {
-            $response = $row['f_geometry_column'];
-        }
-        if ($field == 'srid') {
-            $response = $row['srid'];
-        }
-        if ($field == 'type') {
-            $arr = isset($row['def']) ? json_decode($row['def'], true) : [];
-            if (isset($arr['geotype']) && ($arr['geotype']) && $arr['geotype'] != "Default") {
-                $response = $arr['geotype'];
+            $response = [];
+            $_schema = sizeof(explode(".", $table)) > 1 ? explode(".", $table)[0] : "";
+            $_table = sizeof(explode(".", $table)) > 1 ? explode(".", $table)[1] : $table;
+            if (!$_schema) {
+                $_schema = $this->postgisschema ?: "";
             } else {
-                $response = $row['type'];
+                $_schema = str_replace(".", "", $_schema);
             }
+            $row = $this->getColumns($_schema, $_table)[0] ?? null;
+            if (!$row) {
+                return null;
+            } else {
+                $this->theGeometry = $row['type'];
+            }
+            if ($field == 'f_geometry_column') {
+                $response = $row['f_geometry_column'];
+            }
+            if ($field == 'srid') {
+                $response = $row['srid'];
+            }
+            if ($field == 'type') {
+                $arr = isset($row['def']) ? json_decode($row['def'], true) : [];
+                if (isset($arr['geotype']) && ($arr['geotype']) && $arr['geotype'] != "Default") {
+                    $response = $arr['geotype'];
+                } else {
+                    $response = $row['type'];
+                }
+            }
+            if ($field == 'tweet') {
+                $response = $row['tweet'];
+            }
+            if ($field == 'editable') {
+                $response = $row['editable'];
+            }
+            if ($field == 'authentication') {
+                $response = $row['authentication'];
+            }
+            if ($field == 'privileges') {
+                $response = $row['privileges'];
+            }
+            if ($field == 'fieldconf') {
+                $response = $row['fieldconf'];
+            }
+            if ($field == 'def') {
+                $response = $row['def'];
+            }
+            if ($field == 'id') {
+                $response = $row['id'];
+            }
+            if ($field == 'elasticsearch') {
+                $response = $row['elasticsearch'];
+            }
+            if ($field == 'featureid') {
+                $response = $row['featureid'];
+            }
+            if ($field == '*') {
+                $response = $row;
+            }
+            $CachedString->set($response)->expiresAfter(Globals::$cacheTtl);
+            Cache::save($CachedString);
+            return $response;
         }
-        if ($field == 'tweet') {
-            $response = $row['tweet'];
-        }
-        if ($field == 'editable') {
-            $response = $row['editable'];
-        }
-        if ($field == 'authentication') {
-            $response = $row['authentication'];
-        }
-        if ($field == 'fieldconf') {
-            $response = $row['fieldconf'];
-        }
-        if ($field == 'def') {
-            $response = $row['def'];
-        }
-        if ($field == 'id') {
-            $response = $row['id'];
-        }
-        if ($field == 'elasticsearch') {
-            $response = $row['elasticsearch'];
-        }
-        if ($field == 'featureid') {
-            $response = $row['featureid'];
-        }
-        if ($field == '*') {
-            $response = $row;
-        }
-        return $response;
     }
 
 
@@ -908,7 +943,7 @@ class Model
      */
     public static function toAscii(string $str, ?array $replace = [], string $delimiter = '-', string $delimiterRegex = "/[\/_|+ -]+/", bool $skipEmail = true): string
     {
-        if (filter_var($str, FILTER_VALIDATE_EMAIL) !== false && $skipEmail) {
+        if (filter_var($str, FILTER_VALIDATE_EMAIL) !== false && $skipEmail && empty(App::$param['dontUseEmailForSubusers'])) {
             return $str;
         }
         if (!empty($replace)) {

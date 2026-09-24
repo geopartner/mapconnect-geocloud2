@@ -72,6 +72,19 @@ use Symfony\Component\Validator\Constraints as Assert;
             type: "boolean",
             example: true,
         ),
+        new OA\Property(
+            property: "user_group",
+            title: "Groups",
+            description: "Groups the sub-user belongs to (each group is itself a sub-user name). Per-layer "
+                . "privileges are inherited from all groups in the full, transitive chain — the highest "
+                . "privilege wins. On POST/PATCH send a JSON array of group names; a JSON-array string is "
+                . "also accepted for back-compat, and null clears the membership. GET returns a decoded array "
+                . "(or null).",
+            type: "array",
+            items: new OA\Items(type: "string"),
+            nullable: true,
+            example: ["editors", "gis_admins"],
+        ),
     ],
     type: "object"
 )]
@@ -261,7 +274,7 @@ class User extends AbstractApi
     {
         return [
             "name" => $user['screenName'] ?? $user['screenname'] ?? $user['userid'],
-            "user_group" => $user["usergroup"] ?? null,
+            "user_group" => UserModel::toGroupArray($user["usergroup"] ?? null),
             "email" => $user["email"] ?? null,
             "properties" => $user["properties"] ?? null,
             "private_properties" => $user["private_properties"] ?? null,
@@ -296,6 +309,25 @@ class User extends AbstractApi
         if (Input::getMethod() == 'post' && $user) {
             $this->postWithResource();
         }
+        // Back-compat: a JSON-array string for user_group is decoded to an array so it passes the
+        // "optional array of strings" validation below. Element/shape checks are left to the
+        // assert (so e.g. a non-string element is rejected); the model normalizes for storage.
+        $decodeBackCompat = static function (array $obj): array {
+            if (array_key_exists('user_group', $obj) && is_string($obj['user_group'])) {
+                $d = json_decode($obj['user_group'], true);
+                if (is_array($d)) {
+                    $obj['user_group'] = $d;
+                }
+            }
+            return $obj;
+        };
+        $decoded = json_decode($body, true);
+        if (is_array($decoded)) {
+            $decoded = array_is_list($decoded)
+                ? array_map(fn($item) => is_array($item) ? $decodeBackCompat($item) : $item, $decoded)
+                : $decodeBackCompat($decoded);
+            $body = json_encode($decoded);
+        }
         $collection = self::getAssert();
         $this->validateRequest($collection, $body, Input::getMethod());
     }
@@ -313,6 +345,13 @@ class User extends AbstractApi
                 //new Assert\PasswordStrength(minScore: 4),
             ]),
             'user_group' => new Assert\Optional([
+                new Assert\AtLeastOneOf([
+                    new Assert\IsNull(),
+                    new Assert\Sequentially([
+                        new Assert\Type('array'),
+                        new Assert\All([new Assert\Type('string')]),
+                    ]),
+                ]),
             ]),
             'properties' => new Assert\Optional([
                 new Assert\Type('array'),

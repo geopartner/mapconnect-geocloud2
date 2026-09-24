@@ -1,8 +1,7 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2025 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
+ * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -20,6 +19,7 @@ use PDOException;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use Phpfastcache\Exceptions\PhpfastcacheLogicException;
 use Psr\Cache\InvalidArgumentException;
+use Throwable;
 
 
 /**
@@ -41,6 +41,7 @@ class Layer extends Table
     {
         $patterns = [
             $this->postgisdb . '*_meta_*',
+            $this->postgisdb . '*_geometryColumns',
         ];
         Cache::deleteByPatterns($patterns);
     }
@@ -79,7 +80,7 @@ class Layer extends Table
      */
     public function getPrivilegesAsArray(string $schema, string $table): array
     {
-        $sql = "select distinct privileges from settings.geometry_columns_join where f_table_name=:table and f_table_schema=:schema";
+        $sql = "select distinct privileges from settings.geometry_columns_view where f_table_name=:table and f_table_schema=:schema";
         $res = $this->prepare($sql);
         $this->execute($res, ['table' => $table, 'schema' => $schema]);
         $privileges = $res->fetchAll(PDO::FETCH_COLUMN);
@@ -99,21 +100,10 @@ class Layer extends Table
      * @param string $column
      * @return string|null
      * @throws PDOException
+     * @throws Throwable
      */
     public function getValueFromKey(string $_key_, string $column): ?string
     {
-        // Original version
-        // $split = explode(".", $_key_);
-        // $schema = $split[0];
-        // $table = $split[1];
-        // $geom = $split[2];
-        // $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table'' AND f_geometry_column = ''$geom''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table'' AND r_raster_column = ''$geom''')";
-        // $res = $this->prepare($sql);
-        // $this->execute($res);
-        // $row = $this->fetchRow($res);
-        // return $row[$column];
-
-        // Improved Version - Take every shortcut we can.
         $split = explode(".", $_key_);
         $schema = $split[0];
         $table = $split[1];
@@ -123,7 +113,7 @@ class Layer extends Table
         // The geometry column is the last part of the _key_, return the split value
         if ($column === 'f_geometry_column') {
             return $geom;
-        } 
+        }
         // The table name is the second part of the _key_, return the split value
         if ($column === 'f_table_name') {
             return $table;
@@ -134,49 +124,48 @@ class Layer extends Table
         }
 
         // Case 2: We are looking for a column that only exists in the view
-        $view_columns = ["coord_dimension", "srid", "type", "_key_"]; // _key_ is added to the list in order to check for relevancy.
+        $viewColumns = ["coord_dimension", "srid", "type", "_key_"]; // _key_ is added to the list in order to check for relevancy.
         $columnEsc = str_replace('"', '""', $column);
 
-        if (in_array($column, $view_columns)) {
-
+        if (in_array($column, $viewColumns)) {
             // Escape values by doubling single quotes (PostgreSQL string escape)
             $schemaEsc = str_replace("'", "''", $schema);
             $tableEsc = str_replace("'", "''", $table);
             $geomEsc = str_replace("'", "''", $geom);
             // Escape column identifier by doubling double quotes
-            
-            
             $sql = "SELECT \"$columnEsc\" FROM settings.getColumns('f_table_schema = ''$schemaEsc'' AND f_table_name = ''$tableEsc'' AND f_geometry_column = ''$geomEsc''', 'r_table_schema = ''$schemaEsc'' AND r_table_name = ''$tableEsc'' AND r_raster_column = ''$geomEsc''')";
             $res = $this->prepare($sql);
             $this->execute($res);
-            $row = $this->fetchRow($res);
-            return $row[$column] ?? null;
-            
-        } else {
 
+        } else {
             // Case 3: We are looking for columns that exist in the table, lets look in that instead. Only get the specific column requested.
             $sql = "SELECT \"$columnEsc\" FROM settings.geometry_columns_join where _key_ = :key";
             $res = $this->prepare($sql);
             $this->execute($res, [
                 ':key' => $_key_,
             ]);
-            $row = $this->fetchRow($res);
-            return $row[$column] ?? null;
         }
+        $row = $this->fetchRow($res);
+        return $row[$column] ?? null;
     }
 
     /**
-     * @param string $db
-     * @param bool|null $auth
-     * @param string|null $query
-     * @param bool|null $includeExtent
-     * @param bool|null $parse
-     * @param bool|null $es
-     * @param bool|null $lookupForeignTables
-     * @param array|null $jwt
-     * @return array
-     * @throws GC2Exception
-     * @throws PhpfastcacheInvalidArgumentException
+     * Retrieves all available metadata and configuration for the specified database,
+     * applying filters and restrictions based on the parameters provided.
+     *
+     * @param string $db The name of the database to retrieve metadata from.
+     * @param bool|null $auth Indicates whether authentication restrictions should be applied.
+     * @param string|null $query An optional query string to filter results (e.g., schemata, layers, or tags).
+     * @param bool|null $includeExtent Whether to include the spatial extent of layers in the response.
+     * @param bool|null $parse Determines if the results should be parsed before returning.
+     * @param bool|null $es Indicates if connection to ElasticSearch should be checked.
+     * @param bool|null $lookupForeignTables Whether foreign table lookups should be performed.
+     * @param array|null $jwt Optional JWT for user-specific access restrictions.
+     * @param bool $restriction If true, applies additional access restrictions.
+     * @return array                            The metadata and configurations for the database, including cache, schema, layers, and other relevant information.
+     * @throws GC2Exception                     Thrown if authentication or authorization fails.
+     * @throws PDOException                     If an error occurs during database interaction.
+     * @throws PhpfastcacheLogicException       If an issue arises when handling cached responses.
      */
     public function getAll(string $db, ?bool $auth, ?string $query = null, ?bool $includeExtent = false, ?bool $parse = false, ?bool $es = false, ?bool $lookupForeignTables = true, ?array $jwt = null, bool $restriction = true): array
     {
@@ -187,7 +176,7 @@ class Layer extends Table
         }
 
         $cacheType = "meta";
-        $cacheId = $this->postgisdb . "_" . Session::getUser(sanitize: true) . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
+        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
 
         $CachedString = Cache::getItem($cacheId);
 
@@ -261,27 +250,25 @@ class Layer extends Table
             // Check if Es is online
             // =====================
             $esOnline = false;
-            
-            // Skip checking if Elasticsearch is online
-            //$split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
-            //if (!empty($split[2])) {
-            //    $port = $split[2];
-            //} else {
-            //    $port = "9200";
-            //}
-            //$esUrl = $split[0] . ":" . $split[1] . ":" . $port;
-            //$ch = curl_init($esUrl);
-            //curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
-            //curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
-            //curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            //curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
-            //curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
-            //curl_exec($ch);
-            //$httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            //curl_close($ch);
-            //if ($httpcode == "200") {
-            //    $esOnline = true;
-            //}
+            $split = explode(":", App::$param['esHost'] ?? '' ?: "http://127.0.0.1");
+            if (!empty($split[2])) {
+                $port = $split[2];
+            } else {
+                $port = "9200";
+            }
+            $esUrl = $split[0] . ":" . $split[1] . ":" . $port;
+            $ch = curl_init($esUrl);
+            curl_setopt($ch, CURLOPT_HEADER, true);    // we want headers
+            curl_setopt($ch, CURLOPT_NOBODY, true);    // we don't need body
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 500);
+            curl_exec($ch);
+            $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            if ($httpcode == "200") {
+                $esOnline = true;
+            }
 
             while ($row = $this->fetchRow($res)) {
                 // TODO Here check privileges and continue loop if user doesn't has access
@@ -340,7 +327,8 @@ class Layer extends Table
                     }
                     if ($parse) {
                         if (
-                            ($key == "fieldconf" ||
+                            ($key == "elasticsearch" ||
+                                $key == "fieldconf" ||
                                 $key == "def" ||
                                 $key == "class" ||
                                 $key == "classwizard" ||
@@ -433,12 +421,12 @@ class Layer extends Table
                 foreach ($fields as $key => $field) {
                     // If column comment is empty, we output from field conf
                     if (empty($field['comment'])) {
-                        $fields[$key]['comment'] = $fieldConf[$key]['desc'] ?? '';
+                        $fields[$key]['comment'] = $fieldConf[$key]['desc'];
                     }
-                    $fields[$key]['alias'] = $fieldConf[$key]['alias'] ?? '';
-                    $fields[$key]['queryable'] = (bool)($fieldConf[$key]['querable'] ?? false);
-                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'] ?? 0;
-                    $fields[$key]['desc'] = $fieldConf[$key]['desc'] ?? '';
+                    $fields[$key]['alias'] = $fieldConf[$key]['alias'];
+                    $fields[$key]['queryable'] = (bool)$fieldConf[$key]['querable'];
+                    $fields[$key]['sort_id'] = $fieldConf[$key]['sort_id'];
+                    $fields[$key]['desc'] = $fieldConf[$key]['desc'];
                     $fields[$key]['properties'] = !empty($fieldConf[$key]['properties']) ? json_decode($fieldConf[$key]['properties'], true) : null;
                     // restriction ??
                 }
@@ -454,7 +442,7 @@ class Layer extends Table
                 });
                 // Filter out ignored fields
                 $fields = array_filter($fields, function ($item, $key) use (&$fieldConf) {
-                    if (empty($fieldConf[$key]['ignore'] ?? false)) {
+                    if (empty($fieldConf[$key]['ignore'])) {
                         return true;
                     }
                     return false;
@@ -481,9 +469,11 @@ class Layer extends Table
 
                 if ($subUser) {
                     $privileges = (array)json_decode($row["privileges"]);
-                    if (($privileges[$userGroup ?: $userName] != "none" && $privileges[$userGroup ?: $userName])) {
-                        $response['data'][] = $arr;
-                    } elseif ($userName == $schema || $userGroup == $schema) {
+                    $authorization = new Authorization(connection: $this->connection);
+                    $privilege = $authorization->extractHighestPrivilege($privileges, $userName, $userGroup);
+                    $isOwner = $authorization->isOwner($userName, $userGroup, $schema ?? $this->postgisschema);
+                    $hasNone = $privilege === "none";
+                    if (!$hasNone || $isOwner) {
                         $response['data'][] = $arr;
                         // Always add layers with Write and None.
                     } elseif ($row["authentication"] == "None" || $row["authentication"] == "Write") {
@@ -522,7 +512,6 @@ class Layer extends Table
             $response['success'] = true;
             $response['message'] = "geometry_columns_view fetched";
             $CachedString->set($response)->expiresAfter(Globals::$cacheTtl);//in seconds, also accepts Datetime
-            //   $CachedString->addTags([$cacheType, $this->postgisdb]);
             Cache::save($CachedString);
             $response["cache"]["hit"] = false;
         }
@@ -535,7 +524,7 @@ class Layer extends Table
      * @throws PhpfastcacheInvalidArgumentException
      * @throws GC2Exception
      */
-    public function getElasticsearchMapping(string $_key_): array
+    public function getElasticsearchMapping(string $_key_, bool $modern = false): array
     {
         $elasticsearch = new Elasticsearch();
         $response['success'] = true;
@@ -546,7 +535,7 @@ class Layer extends Table
         $table = new Table($keySplit[0] . "." . $keySplit[1], false);
         $elasticsearchArr = (array)json_decode($this->getGeometryColumns($keySplit[0] . "." . $keySplit[1], "elasticsearch"));
         foreach ($table->metaData as $key => $value) {
-            $esType = $elasticsearch->mapPg2EsType($value['type'], !empty($value['geom_type']) && $value['geom_type'] == "POINT");
+            $esType = $elasticsearch->mapPg2EsType($value['type'], !empty($value['geom_type']) && $value['geom_type'] == "POINT", $modern, $value['full_type'] ?? null);
             $arr = $this->array_push_assoc($arr, "id", $key);
             $arr = $this->array_push_assoc($arr, "column", $key);
             $arr = $this->array_push_assoc($arr, "elasticsearchtype", $elasticsearchArr[$key]->elasticsearchtype ?: $esType["type"]);
@@ -562,6 +551,14 @@ class Layer extends Table
                 $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']} ({$value['typeObj']['precision']} {$value['typeObj']['scale']})");
             } else {
                 $arr = $this->array_push_assoc($arr, "type", "{$value['typeObj']['type']}");
+            }
+            // Preserve additional per-column config keys (modern mapping params such
+            // as fields/normalizer/doc_values) so they survive to createMapFromTable.
+            // Additive: legacy configs have none of these, so their rows are unchanged.
+            foreach ((array)($elasticsearchArr[$key] ?? []) as $extraKey => $extraVal) {
+                if (!array_key_exists($extraKey, $arr)) {
+                    $arr = $this->array_push_assoc($arr, $extraKey, $extraVal);
+                }
             }
             $response['data'][] = $arr;
         }
@@ -732,16 +729,6 @@ class Layer extends Table
                 $arr[] = $key;
             }
         }
-
-        // Filter out keys that contain "@", since they are from Keycloak and not relevant for local privileges
-        $filtered = [];
-        foreach ($arr as $subuser) {
-            if (!str_contains($subuser, '@')) {
-                $filtered[] = $subuser;
-            }
-        }
-        $arr = $filtered;
-
         foreach ($arr as $subuser) {
             $privileges->$subuser = $privileges->$subuser ?? "none";
             if ($subuser != $this->schema) {
@@ -793,30 +780,20 @@ class Layer extends Table
 
     /**
      * @throws PDOException|InvalidArgumentException|GC2Exception
+     * @throws Throwable
      */
     public function setPrivilegesOnAll(string $subuser, string $privilege): void
     {
-        // Original version
-        // new User($subuser)->doesUserExist();
-        // $this->clearCacheOnSchemaChanges();
-        // $path = "{" . $subuser . "}";
-        // $privilege = "\"" . $privilege . "\"";
-        // $sql = "update settings.geometry_columns_join set privileges = jsonb_set(privileges, :path, :privilege)";
-        // $res = $this->prepare($sql);
-        // $this->execute($res, ["path" => $path, "privilege" => $privilege]);
-
-        // Updated version using jsonb_build_object and COALESCE to efficiently update privileges
+        // Using jsonb_build_object and COALESCE to efficiently update privileges
         new User($subuser)->doesUserExist();
         // Start by clearing the cache on schema changes
         $this->clearCacheOnSchemaChanges();
-
         // Execute the SQL to update privileges for the specified subuser, but skip writing to the layers that doesnt have to be modified
         $sql = "
             UPDATE settings.geometry_columns_join 
             SET privileges = COALESCE(privileges, '{}'::jsonb) || jsonb_build_object(:subuser, :privilege) 
             WHERE privileges->>:subuser IS DISTINCT FROM :privilege;
         ";
-        
         $res = $this->prepare($sql);
         $this->execute($res, ["subuser" => $subuser, "privilege" => $privilege]);
     }
@@ -1047,5 +1024,33 @@ class Layer extends Table
         $response['success'] = true;
         $response['count'] = $res->rowCount();
         return $response;
+    }
+
+    /**
+     * Checks whether a layer row exists in settings.geometry_columns_join.
+     */
+    public function doesLayerExist(string $key): bool
+    {
+        $sql = "SELECT 1 FROM settings.geometry_columns_join WHERE _key_=:key";
+        $res = $this->prepare($sql);
+        $this->execute($res, ['key' => $key]);
+        return (bool)$this->fetchRow($res);
+    }
+
+    /**
+     * Returns the _key_ of every layer, optionally restricted to a list of schemas.
+     */
+    public function getLayerKeys(?array $schemas = null): array
+    {
+        if ($schemas === null) {
+            $sql = "SELECT _key_ FROM settings.geometry_columns_join ORDER BY _key_";
+            $res = $this->prepare($sql);
+            $this->execute($res);
+        } else {
+            $sql = "SELECT _key_ FROM settings.geometry_columns_join WHERE split_part(_key_, '.', 1) = ANY(:schemas) ORDER BY _key_";
+            $res = $this->prepare($sql);
+            $this->execute($res, ['schemas' => '{' . implode(',', $schemas) . '}']);
+        }
+        return array_column($this->fetchAll($res, "assoc"), '_key_');
     }
 }

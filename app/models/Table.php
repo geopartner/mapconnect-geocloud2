@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2024 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -130,6 +129,12 @@ class Table extends Model
             $this->postgisdb . '_' . md5($relName) . '*',
             $this->postgisdb . '*_meta_*',
             $this->postgisdb . '*_legend_*',
+            // getGeometryColumns() caches per (rel, field) under a *_geometryColumns key
+            // (md5(rel.'_'.field), so the md5(relName) pattern above never matches it) and is
+            // consulted before getColumns(). Leaving it stale keeps serving the old
+            // 'authentication' level — a security window where a layer switched to Read/write
+            // still answers anonymous WFS/OWS reads until the TTL expires.
+            $this->postgisdb . '*_geometryColumns',
         ];
         Cache::deleteByPatterns($patterns);
     }
@@ -224,9 +229,15 @@ class Table extends Model
     // TODO Move to layer model. This may belong to the Layer class
 
     /**
-     * @param bool $createKeyFrom
-     * @param string|null $schema
-     * @return array
+     * Retrieves records from the database with optional schema filtering and key creation.
+     * Retrieves records from the database with optional schema filtering and key creation.
+     *
+     * @param bool $createKeyFrom Indicates whether to create a key for each record.
+     * @param string|null $schema Optional schema name to filter the records. Defaults to null.
+     * @return array Returns an associative array containing the query results, including metadata and additional properties for each record.
+     * @throws PDOException If there is an error executing database queries.
+     * @throws Exception If there are errors in external system communication such as Elasticsearch.
+     * @throws \Throwable
      */
     public function getRecords(bool $createKeyFrom = false, ?string $schema = null): array
     {
@@ -303,16 +314,20 @@ class Table extends Model
         }
 
         while ($row = $this->fetchRow($result)) {
-            $privileges = !empty($row["privileges"]) ? json_decode($row["privileges"]) : null;
+            $privileges = !empty($row["privileges"]) ? json_decode($row["privileges"], true) : [];
             $arr = [];
-            if (isset($_SESSION)) {
-                $prop = !empty($_SESSION['usergroup']) ? $_SESSION['usergroup'] : $_SESSION['screen_name'];
+            $userGroup = $_SESSION['usergroup'] ?? [];
+            if (!empty($_SESSION["subuser"])) {
+                $authorization = new Authorization(connection: $this->connection);
+                $privilege = $authorization->extractHighestPrivilege($privileges, $_SESSION["screen_name"], $userGroup);
+                $isOwner = $authorization->isOwner($_SESSION["screen_name"], $userGroup, $schema ?? $this->postgisschema);
+                $hasNone = $privilege === "none";
             } else {
-                $prop = null;
+                $hasNone = true;
+                $isOwner = false;
             }
 
-            if (empty($_SESSION["subuser"]) || ($prop == $this->postgisschema)
-                || (!empty($privileges->$prop) && $privileges->$prop != "none")) {
+            if (empty($_SESSION["subuser"]) || $isOwner || !$hasNone) {
                 $relType = "t"; // Default
                 foreach ($row as $key => $value) {
                     if (!empty($row['def']) && $key == "type" && $value == "GEOMETRY") {
@@ -542,16 +557,16 @@ class Table extends Model
                                     $fValue['querable'] = $fValue['queryable'];
                                     unset($fValue['queryable']);
                                 }
-                                $rec[$fKey] = array_merge($rec[$fKey] ?? [],$fValue);
+                                $rec[$fKey] = array_merge($rec[$fKey] ?? [], $fValue);
                             }
                             $value = json_encode($rec, JSON_UNESCAPED_UNICODE);
                         }
-                    } 
+
+                    }
                     // We need to make sure some keys are not URL-encoded when they are written to the database.
                     if (in_array($key, ["data", "meta_url", "wmssource", "wmsclientepsgs", "bitmapsource", "note", "legend_url"])) {
                         $value = urldecode($value);
                     }
-                    
                     else {
                         if (is_object($value) || is_array($value)) {
                             $value = json_encode($value, JSON_UNESCAPED_UNICODE);
@@ -783,6 +798,7 @@ class Table extends Model
                 $res->execute();
                 $value->column = $safeColumn;
                 unset($fieldconfArr[$value->id]);
+                $value->id = $value->column;
                 $response['message'] = "Renamed";
                 $response['name'] = $safeColumn;
             } else {
@@ -805,7 +821,7 @@ class Table extends Model
                 }
             }
 
-            if ($this->metaData[$value->id]["desc"] !== $value->desc && !$onlyRename) {
+            if ($this->metaData[$value->id]["comment"] !== $value->desc && !$onlyRename) {
                 if ($value->desc === "") {
                     $value->desc = null;
                 }

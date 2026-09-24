@@ -2,7 +2,6 @@
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2026 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -18,7 +17,6 @@ use app\inc\Model;
 use app\inc\TableWalkerRelation;
 use DateInterval;
 use DateTimeImmutable;
-use Error;
 use PDO;
 use PDOException;
 use PhpOffice\PhpSpreadsheet\Reader\Csv;
@@ -31,7 +29,6 @@ use sad_spirit\pg_wrapper\Connection as WrapperConnection;
 use ZipArchive;
 use sad_spirit\pg_builder\StatementFactory;
 use sad_spirit\pg_wrapper\converters\DefaultTypeConverterFactory;
-
 
 
 /**
@@ -52,6 +49,8 @@ class Sql extends Model
     private const string DEFAULT_TIME_FORMAT = 'H:i:s';
     private const string DEFAULT_TIMETZ_FORMAT = 'H:i:s P';
     private const string DEFAULT_DATE_FORMAT = 'Y-m-d';
+
+    private const array NO_ZIP_FORMATS = ['ogr/GPX', 'ogr/Parquet'];
     private WrapperConnection|null $wrapperConnection = null;
 
     private DefaultTypeConverterFactory $defaultTypeConverterFactory;
@@ -101,18 +100,18 @@ class Sql extends Model
      * @throws \PhpOffice\PhpSpreadsheet\Writer\Exception
      */
     public function sql(
-        string $q,
+        string  $q,
         ?string $clientEncoding = null,
         ?string $format = "geojson",
         ?string $geoformat = "wkt",
-        bool $csvAllToStr = false,
+        bool    $csvAllToStr = false,
         ?string $aliasesFrom = null,
         ?string $nlt = null,
         ?string $nln = null,
-        bool $convertTypes = false,
-        ?array $parameters = null,
-        ?array $typeHints = null,
-        ?array $typeFormats = null
+        bool    $convertTypes = false,
+        ?array  $parameters = null,
+        ?array  $typeHints = null,
+        ?array  $typeFormats = null
     ): array
     {
         // Check params
@@ -159,8 +158,9 @@ class Sql extends Model
                     }
                 }
             }
-            if ($format == "ogr/GPX") {
-                header("Content-type: application/gpx, application/octet-stream");
+            if (in_array($format, self::NO_ZIP_FORMATS)) {
+                $contentType = $format == "ogr/GPX" ? "application/gpx, application/octet-stream" : "application/octet-stream";
+                header("Content-type: $contentType");
                 header("Content-Disposition: attachment; filename=\"$fileOrFolder\"");
                 readfile($path);
             } else {
@@ -243,9 +243,8 @@ class Sql extends Model
                     // Convert data URLs to HTTP. Read the first bytes to get the mimetype.
                     $priKeyName = $this->getPrimeryKey($rel)['attname'];
                     $rowValue = App::$param['host'] . "/api/v1/decodeimg/" . $this->postgisdb . "/" . str_replace('"', '', $rel) . "/" . $key . "/";
-                    $fieldsArr[] = "'$rowValue'||$priKeyName||'?mimetype='||SPLIT_PART(SPLIT_PART(encode(substring(\"$key\" from 0 for 100),'escape'),';',1),':',2) as \"$key\"";
+                    $fieldsArr[] = "'$rowValue'||$priKeyName as \"$key\"";
                 } else {
-//                    $fieldsArr[] = "\"$key\"";
                     $fieldsArr[] = "encode(\"$key\",'escape') as \"$key\"";
                 }
             } elseif ($type == "_bytea") {
@@ -253,7 +252,7 @@ class Sql extends Model
                     // Convert data URLs to HTTP. Read the first bytes to get the mimetype.
                     $priKeyName = $this->getPrimeryKey($rel)['attname'];
                     $rowValue = App::$param['host'] . "/api/v1/decodeimg/" . $this->postgisdb . "/" . str_replace('"', '', $rel) . "/" . $key . "/";
-                    $fieldsArr[] = "(SELECT (array_agg('$rowValue' || $priKeyName || '/' || (i - 1) || '?mimetype=' || SPLIT_PART(SPLIT_PART(encode(substring(f from 0 for 100), 'escape'), ';', 1), ':', 2))) FROM unnest(\"$key\") WITH ORDINALITY AS t(f, i)) as \"$key\"";
+                    $fieldsArr[] = "(SELECT (array_agg('$rowValue' || $priKeyName || '/' || (i - 1) ORDER BY i)) FROM generate_series(1, array_length(\"$key\", 1)) AS i) as \"$key\"";
                 } else {
                     $fieldsArr[] = "\"$key\"";
                 }
@@ -264,8 +263,13 @@ class Sql extends Model
         $fieldsStr = implode(",", $fieldsArr);
         $sql = "SELECT $fieldsStr FROM ($q) AS foo LIMIT $limit";
         // Settings from App.php
+        // SET LOCAL keeps the override scoped to the current transaction. A plain
+        // SET would persist on the backend after COMMIT and — under PgBouncer
+        // transaction pooling — leak into the next client that reuses the connection,
+        // relying on server_reset_query to clean it up. This runs inside the SQL
+        // API's withTransaction(), so LOCAL is both correct and pool-safe.
         if (!empty(App::$param["SqlApiSettings"]["work_mem"])) {
-            $this->execQuery("SET work_mem TO '" . App::$param["SqlApiSettings"]["work_mem"] . "'");
+            $this->execQuery("SET LOCAL work_mem TO '" . App::$param["SqlApiSettings"]["work_mem"] . "'");
         }
         $this->execQuery("SET LOCAL statement_timeout = " . (App::$param["SqlApiSettings"]["statement_timeout"] ?? "60000"));
         $this->execQuery("SET LOCAL idle_in_transaction_session_timeout = 300000");
@@ -379,8 +383,6 @@ class Sql extends Model
 
             // NDJSON output
             // ==============
-
-            header('Content-type: text/plain; charset=utf-8');
             $i = 0;
             $json = "";
             $bulkSize = 1000;
@@ -424,8 +426,8 @@ class Sql extends Model
 
             // CSV output
             // ================
+            header("Content-Type: text/plain; charset=utf-8");
 
-            header('Content-type: text/plain; charset=utf-8');
             $withGeom = $geoformat;
             $separator = ";";
             $first = true;
@@ -548,7 +550,6 @@ class Sql extends Model
             $this->execQuery("CLOSE curs");
             $csv = implode("\n", $lines);
 
-            // Add BOM for UTF-8 to ensure proper encoding in Excel and other programs
             if ($format == "csv") {
                 header("Content-Type: text/csv; charset=utf-8");
                 header('Content-Disposition: attachment; filename="file.csv"');
@@ -571,7 +572,6 @@ class Sql extends Model
             fclose($handle);
             unlink($file);
             $objWriter = new Xlsx($objPHPExcel);
-            header('Content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
             header('Content-Disposition: attachment; filename="file.xlsx"');
             $objWriter->save('php://output');
             return [];

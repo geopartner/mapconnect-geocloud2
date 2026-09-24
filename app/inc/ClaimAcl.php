@@ -1,6 +1,6 @@
 <?php
 /**
- * @author     Martin Høgh <mh@mapcentia.com>
+ * @author     Martin Høgh <mh@mapcentia.com>, Rene Borella <rgb@mapster.dk>
  * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
@@ -338,6 +338,17 @@ final class ClaimAcl
                 'matcher' => $matcher,
             ];
         }
+
+        // Fall back to __default when no claim-based membership matched,
+        // mirroring the fallback in collectMatches().
+        if (count($memberships) === 0 && isset($this->customMap['__default'])) {
+            $memberships[] = [
+                'key' => '__default',
+                'claim' => '__default',
+                'matcher' => '__default',
+            ];
+        }
+
         return $memberships;
     }
 

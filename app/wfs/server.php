@@ -4,114 +4,93 @@
  * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
- * Dispatches a parsed WFS Request to the right handler.
- * Throws OwsException / ServiceException for protocol-level errors;
- * caller (legacy adapter or v4 controller) is responsible for rendering
- * the exception report.
+ * Legacy WFS adapter. The procedural body that lived here previously
+ * has been extracted into the worker-safe app\wfs\Server class plus
+ * its handlers. This file now exposes a single bootstrap function
+ * that public/index.php calls per request.
  */
 
 namespace app\wfs;
 
-use app\exceptions\OwsException;
-use app\exceptions\ServiceException;
+use app\conf\App;
+use app\conf\Connection as StaticConnection;
 use app\inc\BasicAuth;
+use app\inc\Connection;
 use app\inc\Input;
+use app\inc\Util;
+use app\models\Authorization;
+use app\wfs\output\ExceptionReport;
 use app\wfs\output\GmlWriter;
-use Psr\Cache\InvalidArgumentException;
+use app\wfs\Request as WfsRequest;
 use Throwable;
 
-final class Server
+function bootstrap_legacy_wfs(string $db, string $user, bool $parentUser): void
 {
-    private const array HANDLERS = [
-        'GETCAPABILITIES' => handlers\GetCapabilities::class,
-        'DESCRIBEFEATURETYPE' => handlers\DescribeFeatureType::class,
-        'GETFEATURE' => handlers\GetFeature::class,
-        'TRANSACTION' => handlers\Transaction::class,
-    ];
+    ini_set('max_execution_time', '0');
+    header('Content-Type: text/xml; charset=UTF-8');
+    Util::disableOb();
 
-    public function __construct(private readonly Context $ctx)
-    {
-    }
-
-    /**
-     * @throws OwsException
-     */
-    public function dispatch(Request $req, GmlWriter $writer): void
-    {
-        $this->validateProtocol($req);
-        if ($req->operation !== 'GETCAPABILITIES') {
-            $this->checkLayerEnabled($req);
-            $this->basicAuthPerLayer($req);
-
-        }
-
-        $class = self::HANDLERS[$req->operation]
-            ?? throw new OwsException(
-                "No such operation WFS $req->operation",
-                attributes: ['exceptionCode' => 'OperationNotSupported', 'locator' => $req->operation]
-            );
-
-        new $class($this->ctx)->handle($req, $writer);
-    }
-
-    /**
-     * @throws OwsException
-     */
-    private function validateProtocol(Request $req): void
-    {
-        if ($req->version !== '1.0.0' && $req->version !== '1.1.0') {
-            throw new OwsException("Version $req->version is not supported");
-        }
-        if (strcasecmp($req->service, 'wfs') !== 0) {
-            throw new OwsException(
-                'No service',
-                attributes: ['exceptionCode' => 'MissingParameterValue', 'locator' => 'service']
-            );
-        }
-        if ($req->operation === '') {
-            throw new OwsException(
-                'No request',
-                attributes: ['exceptionCode' => 'MissingParameterValue', 'locator' => 'request']
-            );
+    $schema = StaticConnection::$param['postgisschema'] ?? 'public';
+    $srsParam = Input::getPath()->part(4);
+    $srs = ($srsParam !== null && $srsParam !== '') ? (int) $srsParam : null;
+    $trusted = false;
+    foreach ((App::$param['trustedAddresses'] ?? []) as $address) {
+        if (Util::ipInRange(Util::clientIp(), $address) && getenv('MODE_ENV') !== 'test') {
+            $trusted = true;
+            break;
         }
     }
 
-    /**
-     * @throws OwsException
-     */
-    private function checkLayerEnabled(Request $req): void
-    {
-        if (empty($req->typeNames)) return;
-        $model = $this->ctx->model();
-        foreach ($req->typeNames as $tn) {
-            $row = $model->getGeometryColumns("{$this->ctx->schema}.$tn", '*');
-            if (empty($row['enableows'])) {
-                throw new OwsException(
-                    'Layer is not enabled',
-                    attributes: ['exceptionCode' => 'InvalidParameterValue', 'locator' => 'typename']
-                );
-            }
-        }
-    }
+    $ctx = new Context(
+        connection: new Connection(database: $db, schema: $schema),
+        database: $db,
+        schema: $schema,
+        user: $user,
+        userGroup: null,
+        parentUser: $parentUser,
+        trusted: $trusted,
+        host: Util::host(),
+        thePath: Util::thePath(),
+        startTime: microtime(true),
+        srs: $srs,
+    );
 
-    /**
-     * @throws ServiceException
-     * @throws Throwable
-     * @throws InvalidArgumentException
-     */
-    private function basicAuthPerLayer(Request $req): void
-    {
-        if ($this->ctx->trusted || empty($req->typeNames)) return;
-        $model = $this->ctx->model();
-        $isTransaction = $req->operation === 'TRANSACTION';
-        foreach ($req->typeNames as $tn) {
-            $auth = $model->getGeometryColumns("{$this->ctx->schema}.$tn", 'authentication');
-            $needsAuth = $auth === 'Read/write'
-                || ($isTransaction && ($auth === 'Write' || $auth === 'Read/write'))
-                || !empty(Input::getAuthUser());
-            if ($needsAuth) {
-                new BasicAuth()->authenticate("{$this->ctx->schema}.$tn", $isTransaction);
-            }
+    $writer = new GmlWriter(
+        gmlNameSpace:    $schema,
+        gmlNameSpaceUri: str_replace('https://', 'http://', "$ctx->host/$db/$schema"),
+    );
+
+    $req = null;
+    try {
+        $req = Request::fromHttp($ctx);
+        authorizeLayers($ctx, $req);
+        new Server($ctx)->dispatch($req, $writer);
+        $writer->writeMemoryFooter();
+    } catch (Throwable $e) {
+        // Legacy server.php caught Exception (incl. PDOException) and rendered
+        // an OWS exception report rather than letting the request 500. Match
+        // that behaviour so misconfigured/empty URLs return a structured
+        // exception body, not a fatal error JSON.
+        ExceptionReport::render($e, $req?->version ?? '1.1.0', $writer);
+    }
+}
+function authorizeLayers(\app\wfs\Context $ctx, WfsRequest $req): void
+{
+    if ($ctx->trusted) {
+        return;
+    }
+    $model = $ctx->model();
+    $isTransaction = $req->operation === 'TRANSACTION';
+    foreach ($req->typeNames as $layer) {
+        $rel = "$ctx->schema." . tableOf($layer);
+        $auth = $model->getGeometryColumns($rel, 'authentication');
+        if ($auth === 'Read/write' || !empty(Input::getAuthUser())) {
+            new BasicAuth(connection: $ctx->connection)->authenticate($rel, $isTransaction);
         }
     }
+}
+function tableOf(string $layer): string
+{
+    $bits = explode('.', $layer);
+    return $bits[1] ?? $bits[0];
 }

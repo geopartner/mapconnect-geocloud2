@@ -5,7 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
-## [2026.6.4] - 2026-18-6
+## [2026.9.1]
+### Added
+- Cache Basic-auth allow decisions on the legacy /ows and /wms endpoints
+
+### Fixed
+- Handle null privileges in extractHighestPrivilege function.
+
+## [2026.9.0]
+### Added
+- **Parquet snapshots.** `POST /api/v4/snapshots` queues an export of a table or view to (Geo)Parquet and, optionally, FlatGeobuf; a cron worker writes the files to S3 or local storage and publishes them in a per-database, per-relation, per-date layout. `GET /api/v4/snapshots` reports status. Formats are chosen per request (`formats`) with a server default in `App.php`; formats a relation cannot produce are skipped with a reason.
+- Fast listings for clients: `GET /api/v4/schemas` returns the read-only `_table_count` (tables, views and materialized views) on every schema, also with `namesOnly=true`; `GET /api/v4/schemas/{schema}/tables?namesOnly=true` is now one catalog query for the whole schema (before it still built every table's full definition and merely omitted it) and returns `name`, `_type`, `_events`, `_column_count` and `_links` per table. The full listings are unchanged apart from the new `_column_count`.
+- Snapshot `latest`: `…/snapshots/latest[/data[/{format}]|/files/{name}]` is a fixed URL for the newest published snapshot of a relation (metadata adds `_links.latest`); the store gets a `latest.json` pointer and a STAC `latest-version` link per relation, with the Hive partition layout unchanged.
+- **Snapshot read API.** `GET /api/v4/schemas/{schema}/relations/{relation}/snapshots[/{date}[/data[/{format}]|/files/{name}]]` lists and serves published snapshots with HEAD, byte ranges and CORS, proxied or as presigned redirects, so DuckDB, pandas and browsers can read them directly. Sub-user privileges and geofence rules apply.
+- **STAC catalog.** Every publish rewrites a STAC 1.1.0 catalog (catalog, one collection per relation, one item per snapshot with an asset per format) in the snapshot store, with titles from the layer metadata.
+- **Scheduler v4 API.** `api/v4/scheduler/jobs` (CRUD) and `api/v4/scheduler/runs` (list, start, stop) with a run registry: status, host, heartbeat, stale flag, exit reason and the run's log. Jobs can queue a snapshot after import and choose its formats.
+- Scheduler cooldown: `gc2scheduler.minInterval` sets a minimum time between runs of the same job; manual starts bypass it.
+- `AGENTS.md` (imported by `CLAUDE.md`) with the repository's developer rules: API design, worker-safe controllers, background jobs, testing and process.
+- OGC API Features (Part 1 Core, Part 2 CRS) and OGC API Maps (Part 1 Core) under `api/v4/ogc/database/{database}`, served through the WFS engine and the OWS proxy with geofence, versioning and workflow enforced. Map backend errors answer as `502` JSON. Upgrade note: `f=jpeg` maps need the WMS mapfiles regenerated once.
+- v4 Keyvalue API `api/v4/keyvalue/{key}` with an owner/public access model and a `?paths` projection.
+- v4 Layers API `api/v4/layers/{layer}` with addressable classes, styles and labels, and an OpenAPI document that describes every settable layer, class, style and label property.
+- Worker-safe (FrankenPHP) v4 OWS and WFS endpoints (`api/v4/ows/…`, `api/v4/wfs/…`) with full parity to the legacy proxies, Bearer, Basic and anonymous access, and per-layer authorization.
+- Full group-privilege inheritance for layer authorization (nested groups, highest privilege wins, inherited ownership).
+- v4 MapCache: an authorizing tile proxy `api/v4/mapcache/database/{database}/…` and `DELETE …/tileset/{tileset}` to wipe cached tiles (scoped or full).
+- v4 Map API `api/v4/map/schema/{schema}` for the per-schema initial view in EPSG:4326.
+
+### Changed
+- New Docker image based on Trixie with a separate `cron` stage, so the `mapserver` stage can be built without cron.
+- **Scheduler locking rewritten on Postgres advisory locks.** Lock files are gone; one run per job, at most `gc2scheduler.maxJobs` concurrent runs, runs registered in `started_jobs` with heartbeats, a reaper for lost runs and a `timeout` wrapper. The lock session refuses to run behind a transaction-pooled PgBouncer. Old registry rows are repaired by the migration and finished runs are pruned after 30 days.
+- Scheduler WFS imports page by default (WFS 2.0.0 `startIndex`/`count` with an automatic `sortBy`); the `|` grid notation and WFS 1.x behave as before.
+- CLI scripts that loop over all databases release each database's connection (`Model::disconnect()`).
+- `Job::runJob` shell-escapes every value of the `get.php` command line and spawns it with the running php binary.
+- MapCache config is kept in sync by a PHP cron job with Apache configtest and rollback instead of the shell watcher, and the Layer API only regenerates it for caching-relevant changes.
+- v4 OWS and the legacy `/ows`/`/wms` endpoint cache Basic-authenticated per-layer allow decisions for 60 s (same cache entries for both); HTTP Basic auth checks the primary login password before the viewer password (`httpBasicViewerFallback`).
+- Dynamic symbols and labels: classes take any number of styles and labels; class JSON keys are unprefixed (legacy formats stay readable); fixed ids are assigned on save.
+- MapCache config generation refactored into a worker-safe model; front-end build migrated from Grunt to plain Node scripts; the dashboard toolchain runs on Node 24.
+- Meta fields fall back to ordering by `_value` when `_order` is empty.
+
+### Fixed
+- Scheduler: overwrite imports never got the GIST index on `the_geom` (the check ran against the final table before it was created); new and re-imported tables are indexed again.
+- Scheduler: due jobs did not start from cron when php lives in `/usr/local/bin`; curl failures now end the run as failed instead of overwriting the table; `Content-Type` sniffing has a timeout; the scheduler OpenAPI describes optional list forms, partial PATCH and job name normalisation.
+- v4 scope violations answer `403` instead of `500`.
+- Apache keeps the backend `Content-Length` on HEAD and 206 responses (`ap_trust_cgilike_cl`), and CORS allows `Range`/`If-Range` and exposes the range and caching headers.
+- WFS `GetCapabilities` produces valid XML under FrankenPHP/Caddy; the v4 router matches routes with omitted optional trailing segments.
+- Legacy GUI class saves keep fixed class ids; swapped min/max scale denominator tooltips corrected.
+- Docker dev image: Node 24 on the PATH for every shell; the unused `grunt-npm-install` dependency (and its vendored npm 3) removed.
+
+## [2026.6.6] - 2026-29-6
+### FIXED
+- Remove `encodeURIComponent` from the Image URL widget in GC2 Admin. Before this change, the widget incorrectly encoded the image URL.
+- Classes without names are skipped in the JSON legend API. They are already skipped in the HTML legend API.
+- In the SQL API, the mimetype of bytea fields is no longer resolved from reading the first chunks of the bytea. This could be very slow for compressed toasted tables. The resolution is now deferred until the decoding is actually performed in the decode API.
+
+## [2026.6.5] - 2026-23-6
+### Fixed
+- MapFile: Introduce `addSquareBracket` utility function to cleanly handle non-numeric values.
+  Wraps the provided value with square brackets if it is not numeric.
+  If the value already contains square brackets, they are trimmed first before reapplying them.
+
+## [2026.6.4] - 2026-23-6
 ### CHANGED
 - Update UUID defaults to use `uuid_generate_v4()` instead of `gen_random_uuid()` from the uuid-ossp extension.
   The latter is not available on all PostgreSQL versions.

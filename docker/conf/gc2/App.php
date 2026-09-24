@@ -39,6 +39,32 @@ class App
             "db" => 0,
         ],
 
+        // AWS credentials used by the snapshot worker (and other S3 features).
+        "s3" => [
+            // S3 endpoint host used by MapCache S3 caches; not needed for snapshots.
+            "host" => "",
+            "id" => "",
+            "secret" => "",
+            "region" => "eu-west-1",
+        ],
+
+        // Parquet snapshots (POST /api/v4/snapshots, GET .../relations/{relation}/snapshots).
+        // storage: "s3" (credentials from the "s3" block) or "local" (localPath).
+        // download: "proxy" streams through GC2; "redirect" answers with a short-lived
+        // presigned URL (s3 only). Leave bucket/localPath empty to disable.
+        "snapshot" => [
+            "storage" => "s3",
+            "bucket" => "",
+            "prefix" => "",
+            "region" => "eu-west-1",
+            "localPath" => "",
+            "download" => "proxy",
+            "urlTtl" => 300,
+            // Output formats produced when a request does not name any: ids from
+            // SnapshotFormat (parquet, flatgeobuf).
+            "formats" => ["parquet"],
+        ],
+
         // MapCache config
         // In Docker use the names of the containers
         "mapCache" => [
@@ -60,6 +86,12 @@ class App
 
         // Master password for admin. MD5 hashed.
         "masterPw" => null,
+
+        // HTTP Basic auth for WFS/OWS is checked against the primary auth system
+        // (the user's login password in the users table) first. When true, it also
+        // falls back to the legacy per-database "viewer" password in settings.viewer.
+        // Set to false to disable the viewer fallback entirely once it is no longer used.
+        "httpBasicViewerFallback" => true,
 
         // Available baselayer
         "baseLayers" => array(
@@ -100,6 +132,10 @@ class App
         // Enable gc2scheduler
         "gc2scheduler" => array(
             "test" => true,
+            // Maximum number of scheduler jobs importing at the same time (advisory-lock run slots).
+            "maxJobs" => 20,
+            // Minimum seconds between two runs of the same job (0 = off); a run inside the window is recorded as skipped.
+            "minInterval" => 0,
         ),
 
         // Allowed origins for CORS

@@ -16,7 +16,9 @@ use app\conf\App;
 use app\conf\Connection;
 use app\controllers\Tilecache;
 use app\inc\Cache;
+use app\inc\SchedulerLock;
 use app\inc\Util;
+use app\inc\WfsPaging;
 use app\models\Database;
 use app\models\Layer;
 use app\models\Table;
@@ -27,12 +29,7 @@ Cache::setInstance();
 
 
 $report = [];
-
-$lockDir = App::$param['path'] . "/app/tmp/scheduler_locks";
-
-if (!file_exists($lockDir)) {
-    @mkdir($lockDir);
-}
+$lastError = null;
 
 const DOWNLOADTYPE = "downloadType";
 const FEATURECOUNT = "featureCount";
@@ -44,6 +41,7 @@ const GMLAS = "Grid/GMLAS";
 const FILE = "File";
 const ZIP = "Zip";
 const SLEEP = "sleep";
+$report[SLEEP] = 0;
 
 print "Info: Started at " . date(DATE_RFC822);
 
@@ -64,6 +62,10 @@ $longopts = array(
     "preSql:",
     "postSql:",
     "downloadSchema:",
+    "snapshot:",
+    "snapshotFormats:",
+    "manual:",
+    "name:",
 );
 $options = getopt("", $longopts);
 
@@ -80,21 +82,153 @@ $extra = $options["extra"] == "null" ? null : base64_decode($options["extra"]);
 $preSql = $options["preSql"] == "null" ? null : base64_decode($options["preSql"]);
 $postSql = $options["postSql"] == "null" ? null : base64_decode($options["postSql"]);
 $downloadSchema = $options["downloadSchema"];
+$snapshotAfterImport = $options["snapshot"] ?? null;
+// Per-job snapshot formats (base64 encoded JSON list, see Job::buildGetCmd).
+// Absent (or unusable) means the server default, SnapshotFormat::defaults().
+$snapshotFormats = null;
+if (!empty($options["snapshotFormats"])) {
+    $decoded = json_decode((string)base64_decode((string)$options["snapshotFormats"]), true);
+    if (is_array($decoded) && $decoded !== []) {
+        $snapshotFormats = array_values($decoded);
+    }
+}
+$manualStart = !empty($options["manual"]);
+$runName = !empty($options["name"]) ? (base64_decode($options["name"]) ?: null) : null;
 
 $workingSchema = "_gc2scheduler";
 
-// Create lock file
-$lockDir = App::$param['path'] . "/app/tmp/scheduler_locks";
-$lockFile = $lockDir . "/" . $jobId . ".lock";
+$tmpDir = App::$param['path'] . "app/tmp/";
 
-$tmpDir = "/var/www/geocloud2/app/tmp/";
+$conn = new \app\inc\Connection(user: (!empty(App::$param['setUser']) ? $db : Connection::$param["postgisuser"]), database: $db);
 
-if (!file_exists($lockDir)) {
-    @mkdir($lockDir);
+// Locking and run registry live in gc2scheduler (Postgres advisory locks),
+// on a dedicated session that lasts for the whole run. See app/inc/SchedulerLock.php.
+$runHost = gethostname() ?: 'unknown';
+$runPid = getmypid();
+$schedulerLock = new SchedulerLock();
+$schedulerLock->reap();
+if (!$schedulerLock->tryJobLock((int)$jobId)) {
+    $running = $schedulerLock->runningRun((int)$jobId);
+    $reason = "already running" . ($running ? " (run {$running['uuid']}, started {$running['started_at']}, host {$running['host']})" : "");
+    $schedulerLock->recordSkipped((int)$jobId, $db, $runName ?? $safeName, $runPid, $runHost, $reason);
+    print "\nInfo: Job {$jobId} is {$reason}. Exiting.";
+    exit(0);
+}
+$runUuid = null; // set right after the job lock, below
+
+// Cooldown: a job that ran less than gc2scheduler.minInterval seconds ago is
+// skipped (users forget the cron fields and get a job every minute). Manual
+// starts (UI "run now", API) bypass it; the caller asked for this run.
+$minInterval = (int)(App::$param['gc2scheduler']['minInterval'] ?? 0);
+if ($minInterval > 0) {
+    $last = $schedulerLock->latestRun((int)$jobId);
+    if ($last !== null) {
+        $ago = time() - strtotime($last['started_at']);
+        if ($ago < $minInterval) {
+            if ($manualStart) {
+                print "\nInfo: Cooldown bypassed (manual start).";
+            } else {
+                $reason = "cooldown: last run started {$last['started_at']}, {$ago} s ago, minimum {$minInterval} s";
+                $schedulerLock->recordSkipped((int)$jobId, $db, $runName ?? $safeName, $runPid, $runHost, $reason);
+                print "\nInfo: Job {$jobId} skipped: {$reason}. Exiting.";
+                exit(0);
+            }
+        }
+    }
 }
 
-if (!file_exists($lockFile)) {
-    @touch($lockFile);
+// The run is registered as soon as the job lock is held, before the (possibly
+// hour-long) wait for a run slot: a lock-holding run must never be invisible
+// to the API. The slot is filled in by assignSlot() once one is acquired.
+$runUuid = $schedulerLock->startRun((int)$jobId, $db, $runName ?? $safeName, $runPid, null, $runHost);
+
+// Everything printed from here on is also kept for started_jobs.log: the
+// buffer callback hands each chunk back unchanged, so stdout (and the
+// per-job log file it is redirected to) see exactly what they always did.
+$runLog = new \app\inc\RunLog();
+ob_start(function (string $chunk) use ($runLog): string {
+    $runLog->append($chunk);
+    return $chunk;
+}, 4096);
+print "\nInfo: Run {$runUuid} registered";
+
+/** Pushes the output captured so far into the registry row (best effort). */
+function flushRunLog(): void
+{
+    global $schedulerLock, $runUuid, $runLog;
+    if ($runUuid === null || !isset($runLog)) {
+        return;
+    }
+    if (ob_get_level() > 0) {
+        ob_flush();
+    }
+    $schedulerLock->writeLog($runUuid, $runLog->contents());
+}
+
+/** The captured output so far, buffering kept open (cleanUp() prints more after finishing the row). */
+function runLogSnapshot(): ?string
+{
+    global $runLog;
+    if (!isset($runLog)) {
+        return null;
+    }
+    if (ob_get_level() > 0) {
+        ob_flush();
+    }
+    return $runLog->contents();
+}
+
+/** The captured output for the very last write: ends buffering so the final chunk is in. */
+function runLogContents(): ?string
+{
+    global $runLog;
+    if (!isset($runLog)) {
+        return null;
+    }
+    while (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+    return $runLog->contents();
+}
+
+// Bookkeeping when the process dies without reaching cleanUp(): the locks
+// are released by Postgres regardless; this only keeps the registry honest.
+register_shutdown_function(function () use (&$schedulerLock, &$runUuid) {
+    if ($runUuid === null) {
+        return;
+    }
+    $err = error_get_last();
+    $reason = $err !== null ? "terminated: " . $err['message'] : "terminated";
+    $log = runLogContents();
+    try {
+        $schedulerLock->finishRun($runUuid, 'failed', $reason, $log); // no-op if cleanUp() already finalised
+        if ($log !== null) {
+            $schedulerLock->writeLog($runUuid, $log); // the row is final either way: keep the complete log
+        }
+    } catch (Throwable) {
+    }
+});
+if (function_exists('pcntl_async_signals')) {
+    pcntl_async_signals(true);
+    pcntl_signal(SIGINT, function () use (&$schedulerLock, &$runUuid) {
+        print "\nError: Terminated by SIGINT (timeout).";
+        if ($runUuid !== null) {
+            try {
+                $schedulerLock->finishRun($runUuid, 'failed', 'timeout', runLogContents());
+            } catch (Throwable) {
+            }
+        }
+        exit(130);
+    });
+    pcntl_signal(SIGTERM, function () use (&$schedulerLock, &$runUuid) {
+        if ($runUuid !== null) {
+            try {
+                $schedulerLock->finishRun($runUuid, 'failed', 'terminated', runLogContents());
+            } catch (Throwable) {
+            }
+        }
+        exit(143);
+    });
 }
 
 $getFunction = null;
@@ -120,18 +254,32 @@ if (sizeof(explode("|http", $url)) > 1) {
         $url = substr($url, 5); // Strip json:
     }
     $grid = null;
-    // Check if Content type is zip
-    $headers = get_headers($url);
-    print "\n\nheaders\n";
-    foreach ($headers as $header) {
-        if ($header == "Content-Type: application/zip") {
-            $getFunction = "getCmdZip";
+    // A plain WFS 2.0.0 GetFeature URL is paged with startIndex/count (and
+    // sortBy when it can be determined). Grid ("|") jobs and WFS 1.x keep
+    // their existing paths; an explicit startIndex means the caller pages.
+    $wfsPaging = null;
+    if (!$getFunction && ($wfsPaging = WfsPaging::detect($url)) !== null) {
+        print "\nInfo: WFS 2.0.0 GetFeature detected. Using startIndex/count paging (count={$wfsPaging->pageSize}).";
+        $getFunction = "getCmdWfsPaging";
+    }
+    if ($getFunction !== "getCmdWfsPaging") {
+        // Check if Content type is zip
+        // An explicit timeout: without one this blocks on the default
+        // default_socket_timeout while holding the job lock. false (failed
+        // HEAD/GET) is not fatal -- the extension check below still decides.
+        $ctx = stream_context_create(['http' => ['timeout' => 30]]);
+        $headers = get_headers($url, false, $ctx) ?: [];
+        print "\n\nheaders\n";
+        foreach ($headers as $header) {
+            if ($header == "Content-Type: application/zip") {
+                $getFunction = "getCmdZip";
+            }
+            if (str_contains($header, "text/csv")) {
+                $contentIsCsv = true;
+                $getFunction = "getCmd";
+            }
+            print " $header\n";
         }
-        if (str_contains($header, "text/csv")) {
-            $contentIsCsv = true;
-            $getFunction = "getCmd";
-        }
-        print " $header\n";
     }
     // Check file extension if getFunction still not is set
     if (!$getFunction) {
@@ -244,7 +392,7 @@ function buildOgr2ogrCmd(
 {
     $pgConn = "host=" . Connection::$param["postgishost"]
         . " port=" . Connection::$param["postgisport"]
-        . " user=" . Connection::$param["postgisuser"]
+        . " user=" . (!empty(App::$param['setUser']) ? $db : Connection::$param["postgisuser"])
         . " password=" . Connection::$param["postgispw"]
         . " dbname=" . $db;
 
@@ -285,6 +433,11 @@ function buildOgr2ogrCmd(
 function getCmd(): void
 {
     global $encoding, $srid, $dir, $tempFile, $type, $db, $workingSchema, $randTableName, $downloadSchema, $url, $report, $out, $err, $contentIsCsv, $contentIsJson;
+    global $schedulerLock, $runUuid, $lastError;
+    if ($runUuid !== null) {
+        $schedulerLock->heartbeat($runUuid);
+        flushRunLog();
+    }
 
     $report[DOWNLOADTYPE] = URL;
     $tmpFilePath = $dir . "/" . $tempFile;
@@ -304,7 +457,9 @@ function getCmd(): void
     fclose($fp);
     if (isset($error_msg)) {
         print "\n" . $error_msg;
+        $lastError = $error_msg;
         cleanUp();
+        exit(1);
     }
 
     if ($contentIsJson) {
@@ -326,7 +481,7 @@ function getCmd(): void
         $extraArgs[] = "-oo " . escapeshellarg("X_POSSIBLE_NAMES=lon*,Lon*,x,X");
         $extraArgs[] = "-oo " . escapeshellarg("Y_POSSIBLE_NAMES=lat*,Lat*,y,Y");
         $extraArgs[] = "-oo " . escapeshellarg("AUTODETECT_TYPE=YES");
-        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri");
+        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri,position,wkt");
     }
 
     $source = $isCsv ? escapeshellarg("CSV:" . $tmpFilePath) : escapeshellarg($tmpFilePath);
@@ -349,7 +504,7 @@ function getCmd(): void
  */
 function getCmdPaging(): void
 {
-    global $randTableName, $type, $db, $workingSchema, $url, $grid, $id, $encoding, $downloadSchema, $table, $pass, $cellTemps, $report, $numberOfFeatures;
+    global $randTableName, $type, $db, $workingSchema, $url, $grid, $id, $encoding, $downloadSchema, $table, $pass, $cellTemps, $report, $numberOfFeatures, $srid;
 
     $downloadSchema ? $report[DOWNLOADTYPE] = GMLAS : $report[DOWNLOADTYPE] = GML;
 
@@ -360,156 +515,6 @@ function getCmdPaging(): void
     $res = $table->execQuery($sql);
     $cellTemps = [];
 
-    function fetch($row, $url, $randTableName, $encoding, $downloadSchema, $workingSchema, $type, $db, $id): void
-    {
-        global $pass, $count, $cellNumber, $table, $cellTemps, $id, $numberOfFeatures, $srid, $out, $err, $tmpDir;
-        $out = [];
-        $bbox = "{$row["st_xmin"]},{$row["st_ymin"]},{$row["st_xmax"]},{$row["st_ymax"]},EPSG:{$srid}";
-        $wfsUrl = $url . "&BBOX=";
-        $gmlName = $randTableName . "-" . $row["gid"] . ".gml";
-
-        $cellTemp = "_" . time() . "_cell_" . md5(microtime() . rand());
-
-        if (!file_put_contents($tmpDir . $gmlName, Util::wget($wfsUrl . $bbox))) {
-            print "\nError: could not get GML for cell #{$row["gid"]}";
-            $pass = false;
-        }
-
-        $gmlPath = $tmpDir . $gmlName;
-
-        // SRS normalizer
-        $logNormalizeCount = true;
-
-        $perlExpr = $logNormalizeCount ? <<<'PERL'
-            BEGIN { $c = 0; }
-            $c += s{
-              (srsName=")
-              (?:
-                https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
-              | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
-              | urn:ogc:def:crs:EPSG::(\d+)
-              )
-              (")
-            }{
-              $1 . "EPSG:" . ($2 // $3 // $4) . $5
-            }gex;
-            END { print STDERR "SRS normalized: $c\n"; }
-            PERL
-            : <<<'PERL'
-            $c += s{
-              (srsName=")
-              (?:
-                https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
-              | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
-              | urn:ogc:def:crs:EPSG::(\d+)
-              )
-              (")
-            }{
-              $1 . "EPSG:" . ($2 // $3 // $4) . $5
-            }gex;
-            PERL;
-
-        // Normalize SRS in-place
-        $normalizeCmd = "perl -i -0777 -pe " . escapeshellarg($perlExpr) . " " . escapeshellarg($gmlPath);
-        exec($normalizeCmd . ' 2>&1');
-
-        // Build final cmd
-        if ($downloadSchema) {
-            $extraArgs = [
-                "-oo " . escapeshellarg("CONFIG_FILE=/var/www/geocloud2/app/scripts/gmlasconf.xml"),
-            ];
-            $cmd = buildOgr2ogrCmd(
-                encoding: $encoding,
-                srid: $srid,
-                db: $db,
-                workingSchema: $workingSchema,
-                randTableName: $cellTemp,
-                inputPath: "GMLAS:" . escapeshellarg($gmlPath),
-                type: $type,
-                preserveFid: true,
-                extraArgs: $extraArgs,
-            );
-        } else {
-            $cmd = buildOgr2ogrCmd(
-                encoding: $encoding,
-                srid: $srid,
-                db: $db,
-                workingSchema: $workingSchema,
-                randTableName: $cellTemp,
-                inputPath: escapeshellarg($gmlPath),
-                type: $type,
-                preserveFid: true,
-            );
-        }
-
-        exec($cmd . ' 2>&1', $out, $err);
-        if ($err) {
-            $pass = false;
-        }
-
-        // The GMLAS driver sometimes throws a 404 error, so we can't stop on this kind of error
-        foreach ($out as $line) {
-            if (str_contains($line, "FAILURE") || (str_contains($line, "ERROR") && $line != "ERROR 1: HTTP error code : 404")) {
-                $pass = false;
-                break;
-            }
-        }
-
-        if (!$pass) {
-            if ($count > 30) {
-                print "\nError: Too many recursive tries to fetch cell #{$cellNumber}";
-                cleanUp();
-                exit(1);
-            }
-            $count++;
-            sleep(5 * $count); // We increase the wait for each try
-            fetch($row, $url, $randTableName, $encoding, $downloadSchema, $workingSchema, $type, $db, $id);
-            foreach ($out as $line) {
-                print "\n" . $line;
-            }
-            print "\nRequest: " . $wfsUrl . $bbox;
-            print "\nInfo: Outputting the first few lines of the file:";
-            $handle = @fopen($tmpDir . $gmlName, "r");
-            if ($handle) {
-                for ($i = 0; $i < 40; $i++) {
-                    $buffer = fgets($handle, 4096);
-                    print $buffer;
-                }
-                if (!feof($handle)) {
-                    print "\nError: unexpected fgets() fail.";
-                }
-                fclose($handle);
-            }
-            @unlink($tmpDir . $gmlName);
-            cleanUp();
-            exit(1);
-        }
-
-        @unlink($tmpDir . $gmlName);
-
-        $checkSql = "SELECT EXISTS (
-           SELECT FROM pg_catalog.pg_class c
-           JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-           WHERE  n.nspname = '{$workingSchema}'
-           AND    c.relname = '{$cellTemp}'
-           AND    c.relkind = 'r'    -- only tables
-           ) AS exists";
-        $checkRes = $table->execQuery($checkSql);
-        if ($table->fetchRow($checkRes)["exists"]) {
-            $sql = "SELECT count(*) AS number FROM {$workingSchema}.{$cellTemp}";
-            try {
-                $res = $table->prepare($sql);
-                $res->execute();
-                $numberOfFeatures[] = $table->fetchRow($res)["number"];
-                $cellTemps[] = $cellTemp;
-            } catch (PDOException $e) {
-                $numberOfFeatures[] = 0;
-            }
-        } else {
-            $numberOfFeatures[] = 0;
-        }
-    }
-
     print "\n";
     $cellNumber = 1;
     print "\nProcessing cell ";
@@ -518,9 +523,185 @@ function getCmdPaging(): void
         $count = 1;
         print $cellNumber . ' ';
         $cellNumber++;
-        fetch($row, $url, $randTableName, $encoding, $downloadSchema, $workingSchema, $type, $db, $id);
+        $bbox = "{$row["st_xmin"]},{$row["st_ymin"]},{$row["st_xmax"]},{$row["st_ymax"]},EPSG:{$srid}";
+        fetchPart("cell-" . $row["gid"], $url . "&BBOX=" . $bbox);
     }
     print "\n";
+
+    finalizePagedTables();
+}
+
+function fetchPart(string $label, string $requestUrl): array
+{
+    global $pass, $count, $cellNumber, $table, $cellTemps, $id, $numberOfFeatures, $out, $err, $tmpDir,
+           $randTableName, $encoding, $downloadSchema, $workingSchema, $type, $db, $srid;
+    $out = [];
+    global $schedulerLock, $runUuid;
+    if ($runUuid !== null) {
+        $schedulerLock->heartbeat($runUuid);
+        flushRunLog();
+    }
+    $pass = true; // each attempt starts clean so a successful retry counts
+    $counts = ['matched' => null, 'returned' => null];
+    $gmlName = $randTableName . "-" . $label . ".gml";
+
+    $cellTemp = "_" . time() . "_cell_" . md5(microtime() . rand());
+
+    if (!file_put_contents($tmpDir . $gmlName, Util::wget($requestUrl))) {
+        print "\nError: could not get GML for {$label}";
+        $pass = false;
+    } else {
+        // numberMatched/numberReturned sit on the FeatureCollection root; WFS paging needs them
+        $counts = WfsPaging::parseCounts((string)file_get_contents($tmpDir . $gmlName, false, null, 0, 8192));
+    }
+
+    $gmlPath = $tmpDir . $gmlName;
+
+    // SRS normalizer
+    $logNormalizeCount = true;
+
+    $perlExpr = $logNormalizeCount ? <<<'PERL'
+        BEGIN { $c = 0; }
+        $c += s{
+          (srsName=")
+          (?:
+            https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
+          | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
+          | urn:ogc:def:crs:EPSG::(\d+)
+          )
+          (")
+        }{
+          $1 . "EPSG:" . ($2 // $3 // $4) . $5
+        }gex;
+        END { print STDERR "SRS normalized: $c\n"; }
+        PERL
+        : <<<'PERL'
+        $c += s{
+          (srsName=")
+          (?:
+            https?://www\.opengis\.net/gml/srs/epsg\.xml\#(\d+)
+          | https?://www\.opengis\.net/def/crs/EPSG/0/(\d+)/?
+          | urn:ogc:def:crs:EPSG::(\d+)
+          )
+          (")
+        }{
+          $1 . "EPSG:" . ($2 // $3 // $4) . $5
+        }gex;
+        PERL;
+
+    // Normalize SRS in-place
+    $normalizeCmd = "perl -i -0777 -pe " . escapeshellarg($perlExpr) . " " . escapeshellarg($gmlPath);
+    exec($normalizeCmd . ' 2>&1');
+
+    // Build final cmd
+    if ($downloadSchema) {
+        $extraArgs = [
+            "-oo " . escapeshellarg("CONFIG_FILE=" . App::$param['path'] . "app/scripts/gmlasconf.xml"),
+        ];
+        $cmd = buildOgr2ogrCmd(
+            encoding: $encoding,
+            srid: $srid,
+            db: $db,
+            workingSchema: $workingSchema,
+            randTableName: $cellTemp,
+            inputPath: "GMLAS:" . escapeshellarg($gmlPath),
+            type: $type,
+            preserveFid: true,
+            extraArgs: $extraArgs,
+        );
+    } else {
+        $cmd = buildOgr2ogrCmd(
+            encoding: $encoding,
+            srid: $srid,
+            db: $db,
+            workingSchema: $workingSchema,
+            randTableName: $cellTemp,
+            inputPath: escapeshellarg($gmlPath),
+            type: $type,
+            preserveFid: true,
+        );
+    }
+
+    exec($cmd . ' 2>&1', $out, $err);
+    if ($err) {
+        $pass = false;
+    }
+
+    // The GMLAS driver sometimes throws a 404 error, so we can't stop on this kind of error
+    foreach ($out as $line) {
+        if (str_contains($line, "FAILURE") || (str_contains($line, "ERROR") && $line != "ERROR 1: HTTP error code : 404")) {
+            $pass = false;
+            break;
+        }
+    }
+
+    if (!$pass) {
+        if ($count > 3) {
+            print "\nError: Too many recursive tries to fetch {$label}";
+            cleanUp();
+            exit(1);
+        }
+        $count++;
+        sleep(5 * $count); // We increase the wait for each try
+        $retried = fetchPart($label, $requestUrl);
+        if ($pass) {
+            return $retried; // the retry succeeded
+        }
+        foreach ($out as $line) {
+            print "\n" . $line;
+        }
+        print "\nRequest: " . $requestUrl;
+        print "\nInfo: Outputting the first few lines of the file:";
+        $handle = @fopen($tmpDir . $gmlName, "r");
+        if ($handle) {
+            for ($i = 0; $i < 40; $i++) {
+                $buffer = fgets($handle, 4096);
+                print $buffer;
+            }
+            if (!feof($handle)) {
+                print "\nError: unexpected fgets() fail.";
+            }
+            fclose($handle);
+        }
+        @unlink($tmpDir . $gmlName);
+        cleanUp();
+        exit(1);
+    }
+
+    @unlink($tmpDir . $gmlName);
+
+    $checkSql = "SELECT EXISTS (
+       SELECT FROM pg_catalog.pg_class c
+       JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       WHERE  n.nspname = '{$workingSchema}'
+       AND    c.relname = '{$cellTemp}'
+       AND    c.relkind = 'r'    -- only tables
+       ) AS exists";
+    $checkRes = $table->execQuery($checkSql);
+    if ($table->fetchRow($checkRes)["exists"]) {
+        $sql = "SELECT count(*) AS number FROM {$workingSchema}.{$cellTemp}";
+        try {
+            $res = $table->prepare($sql);
+            $res->execute();
+            $numberOfFeatures[] = $table->fetchRow($res)["number"];
+            $cellTemps[] = $cellTemp;
+        } catch (PDOException $e) {
+            $numberOfFeatures[] = 0;
+        }
+    } else {
+        $numberOfFeatures[] = 0;
+    }
+    return $counts;
+}
+
+/**
+ * Unions the per-cell/per-page temp tables into the job table, resolves the
+ * identifier, removes duplicates and re-sequences gid. Shared by the grid
+ * (bbox) paging and the WFS startIndex/count paging.
+ */
+function finalizePagedTables(): void
+{
+    global $table, $workingSchema, $randTableName, $cellTemps, $report, $id, $numberOfFeatures, $lastError;
 
     $selects = [];
     $drops = [];
@@ -558,6 +739,7 @@ function getCmdPaging(): void
         print "\nNotice: No data for the area.";
         $report[FEATURECOUNT] = 0;
         cleanUp(1);
+        exit(0);
     }
 
     $sql = "CREATE TABLE $workingSchema.$randTableName AS " . implode("\nUNION ALL\n", $selects);
@@ -567,6 +749,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         cleanUp();
         exit(1);
     } finally {
@@ -584,7 +767,7 @@ function getCmdPaging(): void
 
     // If source has an "id" fields and identifier is gml:id, it will be mapped to id2 by GMLAS driver
     // We try to rename id2 to id and drop id1
-    $tmpTableName = $workingSchema . ".". $randTableName;
+    $tmpTableName = $workingSchema . "." . $randTableName;
     if ($table->doesColumnExist($tmpTableName, 'id2')['exists']) {
         $sql = "ALTER TABLE $tmpTableName RENAME id2 TO id";
         $res = $table->prepare($sql);
@@ -593,6 +776,7 @@ function getCmdPaging(): void
         } catch (PDOException $e) {
             print "Error: ";
             print_r($e->getMessage());
+            $lastError = $e->getMessage();
             cleanUp();
             exit(1);
         }
@@ -607,6 +791,7 @@ function getCmdPaging(): void
         } catch (PDOException $e) {
             print "Error: ";
             print_r($e->getMessage());
+            $lastError = $e->getMessage();
             cleanUp();
             exit(1);
         }
@@ -646,6 +831,7 @@ function getCmdPaging(): void
                         } catch (PDOException $e) {
                             print "Error: ";
                             print_r($e->getMessage());
+                            $lastError = $e->getMessage();
                             cleanUp();
                             exit(1);
                         }
@@ -653,6 +839,7 @@ function getCmdPaging(): void
                 } catch (PDOException $e) {
                     print "Error: ";
                     print_r($e->getMessage());
+                    $lastError = $e->getMessage();
                     cleanUp();
                     exit(1);
                 }
@@ -660,6 +847,7 @@ function getCmdPaging(): void
         } catch (PDOException $e) {
             print "Error: ";
             print_r($e->getMessage());
+            $lastError = $e->getMessage();
             cleanUp();
             exit(1);
         }
@@ -688,6 +876,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -707,6 +896,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -743,6 +933,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -754,6 +945,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -765,6 +957,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -778,6 +971,7 @@ function getCmdPaging(): void
     } catch (PDOException $e) {
         print "Error: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -788,9 +982,70 @@ function getCmdPaging(): void
     $report[MAXCELLCOUNT] = array_values($numberOfFeatures)[0];
 }
 
+/**
+ * WFS 2.0.0 paging: fetches the job URL page by page with startIndex/count
+ * (and sortBy when the DescribeFeatureType response has an id-like
+ * property), loads each page like a grid cell, then unions the pages.
+ */
+function getCmdWfsPaging(): void
+{
+    global $wfsPaging, $report, $downloadSchema, $pass, $cellTemps, $numberOfFeatures, $count, $cellNumber;
+
+    $downloadSchema ? $report[DOWNLOADTYPE] = GMLAS : $report[DOWNLOADTYPE] = GML;
+
+    print "\nInfo: Start WFS paged download (count={$wfsPaging->pageSize})...";
+
+    if ($wfsPaging->sortBy !== null) {
+        print "\nInfo: sortBy from URL: {$wfsPaging->sortBy}";
+    } else {
+        $property = null;
+        try {
+            $xsd = Util::wget($wfsPaging->describeFeatureTypeUrl(), 10, 120);
+            $property = is_string($xsd) ? WfsPaging::pickSortProperty($xsd) : null;
+        } catch (Throwable $e) {
+            print "\nWarning: DescribeFeatureType failed: " . $e->getMessage();
+        }
+        if ($property !== null) {
+            $wfsPaging = $wfsPaging->withSortBy($property);
+            print "\nInfo: sortBy set to {$property} (from DescribeFeatureType)";
+        } else {
+            print "\nWarning: Could not determine a sortBy property. Paging without sortBy; the server must page in a stable order.";
+        }
+    }
+
+    $pass = true;
+    $cellTemps = [];
+    $numberOfFeatures = [];
+    $startIndex = 0;
+    $page = 1;
+    print "\nProcessing page ";
+    while (true) {
+        $count = 1;
+        $cellNumber = $page;
+        print $page . ' ';
+        $counts = fetchPart("page-" . $page, $wfsPaging->pageUrl($startIndex));
+        if ($counts['returned'] === null) {
+            print "\nWarning: numberReturned missing on page {$page}; assuming it was the last page.";
+        }
+        if (WfsPaging::isLastPage($startIndex, $counts['returned'], $counts['matched'], $wfsPaging->pageSize)) {
+            break;
+        }
+        $startIndex += $counts['returned'];
+        $page++;
+    }
+    print "\nInfo: Fetched {$page} page(s)" . ($counts['matched'] !== null ? " of {$counts['matched']} matched features" : "") . ".";
+
+    finalizePagedTables();
+}
+
 function getCmdFile(): void
 {
     global $randTableName, $type, $db, $workingSchema, $url, $encoding, $srid, $report, $out, $err, $dir;
+    global $schedulerLock, $runUuid;
+    if ($runUuid !== null) {
+        $schedulerLock->heartbeat($runUuid);
+        flushRunLog();
+    }
 
     $report[DOWNLOADTYPE] = FILE;
 
@@ -892,6 +1147,11 @@ function getCmdFile(): void
 function getCmdZip(): void
 {
     global $extCheck2, $dir, $url, $tempFile, $encoding, $srid, $type, $db, $workingSchema, $randTableName, $downloadSchema, $outFileName, $report, $out, $err;
+    global $schedulerLock, $runUuid, $lastError;
+    if ($runUuid !== null) {
+        $schedulerLock->heartbeat($runUuid);
+        flushRunLog();
+    }
 
     $report[DOWNLOADTYPE] = ZIP;
 
@@ -910,7 +1170,9 @@ function getCmdZip(): void
     fclose($fp);
     if (isset($error_msg)) {
         print "\n" . $error_msg;
+        $lastError = $error_msg;
         cleanUp();
+        exit(1);
     }
     $ext = array("shp", "tab", "geojson", "gml", "kml", "mif", "gdb", "csv", "json", "gpkg");
 
@@ -963,12 +1225,13 @@ function getCmdZip(): void
         }
 
     }
-    $isCsv = false;
     if (array_reverse(explode('.', $outFileName))[0] == "json") {
         $csvFile = $outFileName . ".csv";
         Util::json2cvs($outFileName, $csvFile);
         $outFileName = $csvFile;
         $isCsv = true;
+    } else {
+        $isCsv = isCsv($outFileName);
     }
 
     $extraArgs = [
@@ -977,7 +1240,7 @@ function getCmdZip(): void
     if ($isCsv) {
         $extraArgs[] = "-oo " . escapeshellarg("X_POSSIBLE_NAMES=lon*,Lon*,x,X");
         $extraArgs[] = "-oo " . escapeshellarg("Y_POSSIBLE_NAMES=lat*,Lat*,y,Y");
-        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri");
+        $extraArgs[] = "-oo " . escapeshellarg("GEOM_POSSIBLE_NAMES=geometri,position,wkt");
     }
 
     $cmd = buildOgr2ogrCmd(
@@ -993,14 +1256,12 @@ function getCmdZip(): void
     exec($cmd . ' 2>&1', $out, $err);
 }
 
-Database::setDb($db);
-$table = new Table($schema . "." . $safeName);
+$table = new Table(table: $schema . "." . $safeName, connection: $conn);
 
-// Begin transaction
-// =================
-$table->begin();
-$table->execQuery("SET LOCAL statement_timeout = '24h'");
-
+// The working schema must be committed before the job's transaction starts:
+// ogr2ogr loads into it over its own connection and cannot see an
+// uncommitted CREATE SCHEMA (a database that never ran a job would fail
+// every import, and the paged downloads would retry for ~40 minutes first).
 $sql = "CREATE SCHEMA IF NOT EXISTS {$workingSchema}";
 $res = $table->prepare($sql);
 try {
@@ -1008,35 +1269,40 @@ try {
 } catch (PDOException $e) {
     print "Error: ";
     print_r($e->getMessage());
+    $lastError = $e->getMessage();
     cleanUp();
     exit(1);
 }
 
-// We poll for running jobs
-// ========================
-function poll(): void
-{
-    global $getFunction, $lockDir, $report;
-    $sleep = 10;
-    $maxJobs = 20;
-    $fi = new FilesystemIterator($lockDir, FilesystemIterator::SKIP_DOTS);
-    if (iterator_count($fi) > $maxJobs) {
-        print "\nInfo: There are " . iterator_count($fi) . " jobs running right now. Waiting {$sleep} seconds...";
-        $report[SLEEP] += $sleep;
-        sleep($sleep);
-        poll();
-    } else {
-        $getFunction();
-    }
-}
+// Wait for a run slot, register the run, then download
+// ======================================================
+// Done before the transaction begins, so the customer database never sits
+// idle-in-transaction for however long the wait takes (up to hours).
+$maxJobs = (int)(App::$param['gc2scheduler']['maxJobs'] ?? SchedulerLock::DEFAULT_MAX_JOBS);
+$slot = $schedulerLock->acquireSlot($maxJobs, function (int $max, int $sleep) use (&$report, $schedulerLock, &$runUuid) {
+    print "\nInfo: All {$max} run slots are busy. Waiting {$sleep} seconds...";
+    $report[SLEEP] += $sleep;
+    // The run is already registered (right after the job lock), so keep it
+    // from looking stale while it queues.
+    $schedulerLock->heartbeat($runUuid);
+    flushRunLog();
+});
+$schedulerLock->assignSlot($runUuid, $slot);
+print "\nInfo: Run {$runUuid} registered on slot {$slot}";
 
-poll();
+// Begin transaction
+// =================
+$table->begin();
+$table->execQuery("SET LOCAL statement_timeout = '24h'");
+
+$getFunction();
 
 // Check output
 // ============
 if ($err) {
     print "\nError " . $err;
     print_r($out);
+    $lastError = "ogr2ogr failed (exit {$err}): " . implode(" | ", $out);
     // Output the first few lines of file
     if ($grid == null) {
         print "\nInfo: Outputting the first few lines of the file:";
@@ -1059,6 +1325,7 @@ if ($err) {
     foreach ($out as $line) {
         if (strpos($line, "FAILURE") !== false || (strpos($line, "ERROR") !== false && $line != "ERROR 1: HTTP error code : 404")) {
             print_r($out);
+            $lastError = "ogr2ogr reported an error: " . implode(" | ", $out);
             cleanUp();
             exit(1);
         }
@@ -1102,6 +1369,7 @@ try {
     $report[FEATURECOUNT] = 0;
     $table->rollback();
     cleanUp(1);
+    exit(0);
 }
 
 // Pre run SQL
@@ -1115,6 +1383,7 @@ if ($preSql) {
         } catch (PDOException $e) {
             print "\nError: ";
             print_r($e->getMessage());
+            $lastError = $e->getMessage();
             $table->rollback();
             cleanUp();
             exit(1);
@@ -1155,6 +1424,7 @@ if ($o != "-overwrite") {
     } catch (PDOException $e) {
         print "\nError: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -1173,6 +1443,7 @@ if ($o != "-overwrite") {
     } catch (PDOException $e) {
         print "\nError: ";
         print_r($e->getMessage());
+        $lastError = $e->getMessage();
         $table->rollback();
         cleanUp();
         exit(1);
@@ -1180,20 +1451,12 @@ if ($o != "-overwrite") {
     $sql = "SELECT * INTO {$schema}.{$safeName} FROM {$workingSchema}.{$randTableName}";
     $pkSql = "ALTER TABLE {$schema}.{$safeName} ADD PRIMARY KEY (gid)";
 
-    // Check for the_geom and create GIST index on it
-    $sqlCheckForGeom = "SELECT column_name FROM information_schema.columns WHERE table_schema='{$schema}' AND table_name='{$safeName}' and column_name='the_geom'";
-    $res = $table->prepare($sqlCheckForGeom);
-    try {
-        $res->execute();
-        $row = $table->fetchRow($res);
-        if ($row) {
-            $idxSql = "CREATE INDEX {$safeName}_gix ON {$schema}.{$safeName} USING GIST (the_geom)";
-        }
-    } catch (PDOException $e) {
-        print "\nError: ";
-        print_r($e->getMessage());
-        cleanUp();
-        exit(1);
+    // GIST index on the_geom. Decided from the working table's columns
+    // ($fields): the final table was just dropped and only exists after the
+    // SELECT INTO below, so asking information_schema about it here always
+    // said "no geometry" and no import ever got its spatial index.
+    if (in_array('the_geom', $fields, true)) {
+        $idxSql = "CREATE INDEX {$safeName}_gix ON {$schema}.{$safeName} USING GIST (the_geom)";
     }
 
 }
@@ -1205,6 +1468,7 @@ try {
 } catch (PDOException $e) {
     print "\nError: ";
     print_r($e->getMessage());
+    $lastError = $e->getMessage();
     $table->rollback();
     cleanUp();
     exit(1);
@@ -1258,6 +1522,7 @@ if ($extra) {
                 } catch (PDOException $e) {
                     print "\nError: ";
                     print_r($e->getMessage());
+                    $lastError = $e->getMessage();
                     $table->rollback();
                     cleanUp();
                     exit(1);
@@ -1273,6 +1538,7 @@ if ($extra) {
             } catch (PDOException $e) {
                 print "\nError: ";
                 print_r($e->getMessage());
+                $lastError = $e->getMessage();
                 $table->rollback();
                 cleanUp();
                 exit(1);
@@ -1294,6 +1560,7 @@ if ($postSql) {
         } catch (PDOException $e) {
             print "\nError: ";
             print_r($e->getMessage());
+            $lastError = $e->getMessage();
             $table->rollback();
             cleanUp();
             exit(1);
@@ -1306,16 +1573,13 @@ if ($postSql) {
 $table->commit();
 
 print "\nInfo: Data imported into " . $schema . "." . $safeName;
-print "\nInfo: " . Tilecache::bust($schema . "." . $safeName)["message"];
+//print "\nInfo: " . Tilecache::bust($schema . "." . $safeName)["message"];
 
 // Clean up
 // ========
 function cleanUp(int $success = 0): void
 {
-    global $schema, $workingSchema, $randTableName, $table, $jobId, $dir, $tempFile, $safeName, $db, $report, $lockFile;
-
-    // Unlink lock file
-    unlink($lockFile);
+    global $schema, $workingSchema, $randTableName, $table, $jobId, $dir, $tempFile, $safeName, $db, $report, $snapshotAfterImport, $snapshotFormats, $schedulerLock, $runUuid, $lastError, $conn;
 
     // Unlink temp file
     // ================
@@ -1337,8 +1601,7 @@ function cleanUp(int $success = 0): void
 
     // Update jobs table
     // =================
-    Database::setDb("gc2scheduler");
-    $job = new \app\inc\Model();
+    $job = new \app\inc\Model(connection: new \app\inc\Connection(database: 'gc2scheduler'));
 
     // lastcheck
     // =========
@@ -1392,14 +1655,48 @@ function cleanUp(int $success = 0): void
     print "\nInfo: Temp table dropped.";
 
     if ($success) {
-        Database::setDb($db);
-        $layer = new Layer();
+        $layer = new Layer(connection: $conn);
         $layer->updateLastmodified(schema: $schema, table: $safeName);
         print "\nInfo: Last modified value updated";
+        try {
+            $layer->insertDefaultMeta();
+        } catch (PDOException $e) {
+            print "\nWarning: ";
+            print_r($e->getMessage());
+        }
+
+        print "\nInfo: Clear cache for layer $schema.$safeName";
+        $relName = $schema . '.' . $safeName;
+        $patterns = [
+            $db . '_' . md5($relName) . '*',
+            $db . '*_meta_*',
+            $db . '*_legend_*',
+            $db . '*_geometryColumns',
+        ];
+        Cache::deleteByPatterns($patterns);
+        if (!empty($snapshotAfterImport)) {
+            try {
+                $snap = new \app\models\Snapshot(new \app\inc\Connection(database: $db));
+                if (!$snap->hasActive($schema, $safeName)) {
+                    $formats = $snapshotFormats ?? \app\inc\snapshot\SnapshotFormat::defaults();
+                    $snap->create($schema, $safeName, null, $db, $formats);
+                    print "\nInfo: Snapshot queued for $schema.$safeName (formats: " . implode(', ', $formats) . ")";
+                }
+            } catch (\Throwable $e) {
+                print "\nWarning: could not queue snapshot: " . $e->getMessage();
+            }
+        }
+    }
+
+    if ($runUuid !== null) {
+        // Snapshot, not the final contents: the lines printed below still reach
+        // the row through the shutdown hook's last writeLog().
+        $schedulerLock->finishRun($runUuid, $success ? 'succeeded' : 'failed', $success ? null : ($lastError ?? 'see job log'), runLogSnapshot());
     }
 }
 
 cleanUp(1);
+$schedulerLock->release();
 exit(0);
 
 

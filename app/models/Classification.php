@@ -55,6 +55,408 @@ class Classification extends Model
         }
     }
 
+    public const STYLE_KEYS = ['id','color', 'outlinecolor', 'symbol', 'size', 'width', 'angle', 'gap',
+        'opacity', 'pattern', 'linecap', 'geomtransform', 'minsize', 'maxsize',
+        'offsetx', 'offsety', 'polaroffsetr', 'polaroffsetd'];
+
+    /**
+     * Maps the new unprefixed style keys to their legacy flat-format names (used only
+     * on the base class object, optionally prefixed with 'overlay' for the second symbol).
+     */
+    private const STYLE_KEY_LEGACY = [
+        'opacity' => 'style_opacity',
+        'offsetx' => 'style_offsetx',
+        'offsety' => 'style_offsety',
+        'polaroffsetr' => 'style_polaroffsetr',
+        'polaroffsetd' => 'style_polaroffsetd',
+    ];
+
+    /**
+     * Maps new unprefixed class-level keys to the legacy/interim key they replace.
+     * These are identically named in both the legacy-flat and interim-new formats.
+     */
+    private const CLASS_KEY_LEGACY = [
+        'minscaledenom' => 'class_minscaledenom',
+        'maxscaledenom' => 'class_maxscaledenom',
+    ];
+
+    public const LABEL_KEYS = ['id', 'force', 'text', 'minscaledenom', 'maxscaledenom', 'position', 'size',
+        'color', 'outlinecolor', 'buffer', 'repeatdistance', 'angle', 'backgroundcolor',
+        'backgroundpadding', 'offsetx', 'offsety', 'font', 'fontweight', 'expression',
+        'maxsize', 'minfeaturesize'];
+
+    /**
+     * The subset of LABEL_KEYS that are ALSO legitimate class-level keys and must therefore
+     * survive normalization: the shared class id, the class filter EXPRESSION and the class
+     * scale denominators. Every other label key found bare on a class is a stray leftover
+     * from the oldest flat format (before label props were namespaced/moved into labels[])
+     * and is stripped — e.g. `force` (MapServer LABEL FORCE) is never a class property.
+     */
+    private const CLASS_LEVEL_LABEL_KEYS = ['id', 'expression', 'minscaledenom', 'maxscaledenom'];
+
+    /**
+     * Convert a class object from the legacy flat format (Symbol1/Symbol2/Label1/Label2 keys)
+     * to the new format with styles[] and labels[] arrays. Idempotent: new-format input passes
+     * through unchanged (apart from null values inside entries becoming empty strings and the
+     * styles/labels keys being guaranteed to exist). Legacy flat keys are always stripped.
+     */
+    public static function normalizeClass(array $class): array
+    {
+        // Normalize any nested stdClass objects to plain arrays
+        $class = json_decode(json_encode($class), true);
+        $hasNewFormat = isset($class['styles']) || isset($class['labels']);
+
+        // Class-level scale denominators: class_minscaledenom/class_maxscaledenom are named
+        // identically in both the legacy-flat and interim-new formats, so a single rename
+        // pass covers both. If both old and new keys are present, the new key wins.
+        foreach (self::CLASS_KEY_LEGACY as $new => $old) {
+            if (array_key_exists($old, $class)) {
+                if (!array_key_exists($new, $class)) {
+                    $class[$new] = $class[$old];
+                }
+                unset($class[$old]);
+            }
+        }
+
+        $legacyStyles = [];
+        foreach ([['', 10, 'Symbol 1'], ['overlay', 20, 'Symbol 2']] as [$prefix, $sortid, $name]) {
+            $style = [];
+            foreach (self::STYLE_KEYS as $key) {
+                // `id` is in STYLE_KEYS for entry validation, but the bare `id` on a class is
+                // the class's own id — not a legacy flat style key. Never move/strip it here,
+                // or the class id would be reassigned on every normalize (breaking stable ids).
+                if ($key === 'id') continue;
+                $legacyKey = $prefix . (self::STYLE_KEY_LEGACY[$key] ?? $key);
+                if (!empty($class[$legacyKey])) {
+                    $style[$key] = $class[$legacyKey];
+                }
+                unset($class[$legacyKey]);
+            }
+            if (!empty($style)) {
+                $legacyStyles[] = array_merge(['sortid' => $sortid, 'name' => $name], $style);
+            }
+        }
+
+        $legacyLabels = [];
+        foreach ([['label', 10, 'Label 1'], ['label2', 20, 'Label 2']] as [$prefix, $sortid, $name]) {
+            $label = [];
+            foreach (self::LABEL_KEYS as $key) {
+                if ($key === 'id') continue; // entry-validation key, not a legacy flat label key
+                if (!empty($class[$prefix . '_' . $key])) {
+                    $label[$key] = $class[$prefix . '_' . $key];
+                }
+                unset($class[$prefix . '_' . $key]);
+            }
+            $on = !empty($class[$prefix]);
+            unset($class[$prefix]);
+            if ($on || !empty($label)) {
+                $legacyLabels[] = array_merge(['sortid' => $sortid, 'name' => $name, 'on' => $on], $label);
+            }
+        }
+
+        if ($hasNewFormat) {
+            $class['styles'] = $class['styles'] ?? [];
+            $class['labels'] = $class['labels'] ?? [];
+        } else {
+            $class['styles'] = $legacyStyles;
+            $class['labels'] = $legacyLabels;
+        }
+
+        // Strip label-only keys left bare on the class by the oldest flat format (before
+        // label props were namespaced under label_/label2_ or moved into labels[]). They
+        // belong only on label entries; the class-level LEADER family is kept as MapServer
+        // reads it from the class.
+        foreach (array_diff(self::LABEL_KEYS, self::CLASS_LEVEL_LABEL_KEYS) as $strayKey) {
+            unset($class[$strayKey]);
+        }
+
+        foreach (['styles', 'labels'] as $k) {
+            foreach ($class[$k] as $i => $entry) {
+                if (!is_array($entry)) continue;
+                // Interim-new-format rename pass: styles[] entries may still carry the old
+                // style_* keys as persisted by earlier versions of this code. New key wins
+                // when both are present.
+                if ($k === 'styles') {
+                    foreach (self::STYLE_KEY_LEGACY as $new => $old) {
+                        if (array_key_exists($old, $entry)) {
+                            if (!array_key_exists($new, $entry)) {
+                                $entry[$new] = $entry[$old];
+                            }
+                            unset($entry[$old]);
+                        }
+                    }
+                }
+                foreach ($entry as $prop => $v) {
+                    if ($v === null) $entry[$prop] = "";
+                }
+                $class[$k][$i] = $entry;
+            }
+        }
+        return $class;
+    }
+
+    /**
+     * Generates a short random id (8 hex chars) for classes, styles and labels.
+     */
+    public static function generateId(): string
+    {
+        return bin2hex(random_bytes(4));
+    }
+
+    /**
+     * Normalizes every class (see normalizeClass) and assigns an `id` to each class and to each
+     * entry in its styles/labels arrays. A valid, unique existing id is kept (idempotent); an
+     * empty, non-string, or DUPLICATE id is replaced with a fresh unique one — for a duplicate the
+     * first occurrence keeps its id and later occurrences are reassigned. Ids are unique among
+     * classes and among entries within a class (per kind).
+     */
+    public static function ensureIds(array $classes): array
+    {
+        $classes = array_values(array_map([self::class, 'normalizeClass'], $classes));
+
+        $reservedClassIds = self::existingIds($classes);
+        $assignedClassIds = [];
+        foreach ($classes as $i => $class) {
+            $classes[$i]['id'] = self::resolveId($class['id'] ?? null, $assignedClassIds, $reservedClassIds);
+            foreach (['styles', 'labels'] as $kind) {
+                $reservedEntryIds = self::existingIds($classes[$i][$kind]);
+                $assignedEntryIds = [];
+                foreach ($classes[$i][$kind] as $j => $entry) {
+                    $classes[$i][$kind][$j]['id'] = self::resolveId($entry['id'] ?? null, $assignedEntryIds, $reservedEntryIds);
+                }
+            }
+        }
+        return $classes;
+    }
+
+    /**
+     * The non-empty string `id` values present in a list of classes or entries.
+     *
+     * @return array<int, string>
+     */
+    private static function existingIds(array $items): array
+    {
+        return array_values(array_filter(
+            array_column($items, 'id'),
+            fn($id) => is_string($id) && $id !== ''
+        ));
+    }
+
+    /**
+     * Returns a usable id for an entry: the given id when it is a non-empty string not already
+     * assigned in this scope, otherwise a freshly generated id that collides with neither an
+     * already-assigned id nor any reserved (pre-existing) id. The chosen id is appended to
+     * $assigned.
+     *
+     * @param array<int, string> $assigned  ids already committed in this scope (mutated)
+     * @param array<int, string> $reserved  all pre-existing ids in this scope (avoided when generating)
+     */
+    private static function resolveId(mixed $id, array &$assigned, array $reserved): string
+    {
+        if (empty($id) || !is_string($id) || in_array($id, $assigned, true)) {
+            do {
+                $id = self::generateId();
+            } while (in_array($id, $assigned, true) || in_array($id, $reserved, true));
+        }
+        $assigned[] = $id;
+        return $id;
+    }
+
+    /**
+     * Default sortid for a new entry: highest existing sortid + 10 (10 when empty).
+     */
+    public static function nextSortId(array $entries): int
+    {
+        $max = 0;
+        foreach ($entries as $entry) {
+            $max = max($max, (int)($entry['sortid'] ?? 0));
+        }
+        return $max + 10;
+    }
+
+    /**
+     * Reads the raw class JSON for the layer.
+     */
+    private function readRawClasses(): array
+    {
+        $sql = "SELECT class FROM settings.geometry_columns_join WHERE _key_=:layer";
+        $res = $this->prepare($sql);
+        $this->execute($res, ['layer' => $this->layer]);
+        $row = $this->fetchRow($res);
+        return !empty($row['class']) && is_array(json_decode($row['class'], true)) ? json_decode($row['class'], true) : [];
+    }
+
+    /**
+     * Returns all classes in normalized form with ids on classes, styles and labels.
+     * Missing ids are persisted back, so ids are stable from the first call onward.
+     */
+    public function getAllWithIds(): array
+    {
+        $raw = $this->readRawClasses();
+        $classes = self::ensureIds($raw);
+        if ($classes !== $raw) {
+            $this->store(json_encode($classes));
+        }
+        return $classes;
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    public function getClassById(string $id): array
+    {
+        foreach ($this->getAllWithIds() as $class) {
+            if ($class['id'] === $id) {
+                return $class;
+            }
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
+    /**
+     * Replaces the whole class array (declarative provisioning). Ids are assigned.
+     */
+    public function replaceClasses(array $classes): array
+    {
+        $classes = self::ensureIds($classes);
+        $this->store(json_encode($classes));
+        return $classes;
+    }
+
+    /**
+     * Appends new classes and returns their ids. A missing sortid defaults to
+     * highest existing + 10.
+     */
+    public function insertClasses(array $newClasses): array
+    {
+        $classes = $this->getAllWithIds();
+        $count = count($classes);
+        foreach ($newClasses as $newClass) {
+            if (!isset($newClass['sortid']) || $newClass['sortid'] === '') {
+                $newClass['sortid'] = self::nextSortId($classes);
+            }
+            $classes[] = $newClass;
+        }
+        $classes = self::ensureIds($classes);
+        $this->store(json_encode($classes));
+        return array_column(array_slice($classes, $count), 'id');
+    }
+
+    /**
+     * Key-merges $props into the class. `id`, `styles` and `labels` are ignored.
+     * @throws GC2Exception
+     */
+    public function patchClassById(string $id, array $props): void
+    {
+        unset($props['id'], $props['styles'], $props['labels']);
+        $classes = $this->getAllWithIds();
+        foreach ($classes as $i => $class) {
+            if ($class['id'] === $id) {
+                $classes[$i] = array_merge($class, $props);
+                $this->store(json_encode($classes));
+                return;
+            }
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    public function deleteClassById(string $id): void
+    {
+        $classes = $this->getAllWithIds();
+        foreach ($classes as $i => $class) {
+            if ($class['id'] === $id) {
+                array_splice($classes, $i, 1);
+                $this->store(json_encode($classes));
+                return;
+            }
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    public function getEntries(string $classId, string $kind): array
+    {
+        return $this->getClassById($classId)[$kind];
+    }
+
+    /**
+     * Appends entries to a class's styles or labels and returns their ids.
+     * A missing sortid defaults to highest existing + 10.
+     * @throws GC2Exception
+     */
+    public function insertEntries(string $classId, string $kind, array $entries): array
+    {
+        if (count($entries) === 0) {
+            return [];
+        }
+        $classes = $this->getAllWithIds();
+        foreach ($classes as $i => $class) {
+            if ($class['id'] === $classId) {
+                foreach ($entries as $entry) {
+                    if (!isset($entry['sortid']) || $entry['sortid'] === '') {
+                        $entry['sortid'] = self::nextSortId($classes[$i][$kind]);
+                    }
+                    $classes[$i][$kind][] = $entry;
+                }
+                $classes = self::ensureIds($classes);
+                $this->store(json_encode($classes));
+                return array_column(array_slice($classes[$i][$kind], -count($entries)), 'id');
+            }
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
+    /**
+     * Key-merges $props into a style/label entry. `id` is ignored.
+     * @throws GC2Exception
+     */
+    public function patchEntryById(string $classId, string $kind, string $id, array $props): void
+    {
+        unset($props['id']);
+        $classes = $this->getAllWithIds();
+        foreach ($classes as $i => $class) {
+            if ($class['id'] !== $classId) {
+                continue;
+            }
+            foreach ($class[$kind] as $j => $entry) {
+                if ($entry['id'] === $id) {
+                    $classes[$i][$kind][$j] = array_merge($entry, $props);
+                    $this->store(json_encode($classes));
+                    return;
+                }
+            }
+            throw new GC2Exception(ucfirst(rtrim($kind, 's')) . " not found", 404, null, strtoupper(rtrim($kind, 's')) . "_NOT_FOUND");
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
+    /**
+     * @throws GC2Exception
+     */
+    public function deleteEntryById(string $classId, string $kind, string $id): void
+    {
+        $classes = $this->getAllWithIds();
+        foreach ($classes as $i => $class) {
+            if ($class['id'] !== $classId) {
+                continue;
+            }
+            foreach ($class[$kind] as $j => $entry) {
+                if ($entry['id'] === $id) {
+                    array_splice($classes[$i][$kind], $j, 1);
+                    $this->store(json_encode($classes));
+                    return;
+                }
+            }
+            throw new GC2Exception(ucfirst(rtrim($kind, 's')) . " not found", 404, null, strtoupper(rtrim($kind, 's')) . "_NOT_FOUND");
+        }
+        throw new GC2Exception("Class not found", 404, null, "CLASS_NOT_FOUND");
+    }
+
     /**
      * Retrieves all records from the settings.geometry_columns_join table for a specific layer,
      * processes and structures the data, and returns the result.
@@ -71,6 +473,7 @@ class Classification extends Model
         $response['success'] = true;
         $row = $this->fetchRow($res);
         $arr = $arr2 = !empty($row['class']) && is_array(json_decode($row['class'], true)) ? json_decode($row['class'], true) : [];
+        $arr = array_map([self::class, 'normalizeClass'], $arr);
         for ($i = 0; $i < sizeof($arr); $i++) {
             $last = 10000;
             foreach ($arr2 as $key => $value) {
@@ -108,22 +511,8 @@ class Classification extends Model
                 $arr[$key] = "";
             }
         }
-        $props = [
-            "name" => "Unnamed Class",
-            "label" => false,
-            "label_text" => "",
-            "label2_text" => "",
-            "force_label" => false,
-            "color" => "#FF0000",
-            "outlinecolor" => "#FF0000",
-            "size" => "2",
-            "width" => "1"];
-        foreach ($arr as $ignored) {
-            foreach ($props as $key2 => $value2) {
-                if (!isset($arr[$key2])) {
-                    $arr[$key2] = $value2;
-                }
-            }
+        if (!isset($arr['name'])) {
+            $arr['name'] = "Unnamed Class";
         }
         $response['data'] = array($arr);
         return $response;
@@ -175,10 +564,18 @@ class Classification extends Model
 
         $existingClass = $existingClass ? json_decode($tableObj->getGeometryColumns($this->layer, "*")["class"], true) : [];
         $cachedClass = $classCache ? json_decode($classCache, true) : [];
+
+        // Normalize all three inputs to the new styles[]/labels[] format before merging, so the
+        // merge never mixes legacy flat keys with new-format keys and externally-edited legacy
+        // values are not silently discarded.
+        $existingClass = array_map([self::class, 'normalizeClass'], $existingClass);
+        $cachedClass = array_map([self::class, 'normalizeClass'], $cachedClass);
+        $newClass = array_map([self::class, 'normalizeClass'], $newClass);
+
         $mergedClass = $this->mergeClasses($cachedClass, $existingClass, $newClass);
 
         $merged['_key_'] = $this->layer;
-        $merged['class'] = $mergedClass;
+        $merged['class'] = self::ensureIds($mergedClass);
         $tableObj->updateRecord($merged, '_key_');
 
         $cached['_key_'] = $this->layer;
@@ -196,7 +593,24 @@ class Classification extends Model
      * @param array $newClass The new class definitions to merge into the existing state.
      * @return array The merged array of class definitions, preserving external changes and incorporating valid updates.
      */
-    function mergeClasses(array $cachedClass, array $existingClass, array $newClass): array
+    /**
+     * Removes every `id` key, recursively, from a value. Used to make comparisons
+     * between stored classes (which carry server-assigned ids) and wizard-cache
+     * classes (which do not) id-agnostic.
+     */
+    private static function stripIds(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        unset($value['id']);
+        foreach ($value as $key => $item) {
+            $value[$key] = self::stripIds($item);
+        }
+        return $value;
+    }
+
+    static function mergeClasses(array $cachedClass, array $existingClass, array $newClass): array
     {
         // Helper to map by name for comparison
         $byName = function ($arr) {
@@ -228,8 +642,10 @@ class Classification extends Model
                 foreach ($incoming[$name] as $prop => $newVal) {
                     $cachedVal = $cached[$name][$prop] ?? null;
                     $existingVal = $existing[$name][$prop] ?? null;
-                    // Only update property if not changed externally (existing == cached)
-                    if ($existingVal === $cachedVal) {
+                    // Only update property if not changed externally (existing == cached).
+                    // Server-assigned ids never count as an external edit — the wizard
+                    // cache does not carry them.
+                    if (self::stripIds($existingVal) === self::stripIds($cachedVal)) {
                         $target[$prop] = $newVal;
                     }
                     // else: keep the externally modified value
@@ -266,9 +682,9 @@ class Classification extends Model
      */
     public function insert(): array
     {
-        $classes = $this->getAll();
-        $classes['data'][] = ["name" => "Unnamed class"];
-        $this->store(json_encode($classes['data'], JSON_UNESCAPED_UNICODE));
+        $classes = array_map([self::class, 'normalizeClass'], $this->readRawClasses());
+        $classes[] = ["name" => "Unnamed class"];
+        $this->store(json_encode(self::ensureIds($classes), JSON_UNESCAPED_UNICODE));
         $response['success'] = true;
         $response['message'] = "Inserted one class";
         return $response;
@@ -285,11 +701,14 @@ class Classification extends Model
      */
     public function update(int $id, object $data): array
     {
-        $classes = $this->getAll();
+        $classes = array_map([self::class, 'normalizeClass'], $this->readRawClasses());
         foreach ((array)$data as $k => $v) {
-            $classes['data'][$id][$k] = $v;
+            if ($k === 'id') {
+                continue; // the client's positional id must never overwrite the stored fixed id
+            }
+            $classes[$id][$k] = $v;
         }
-        $this->store(json_encode($classes['data'], JSON_UNESCAPED_UNICODE));
+        $this->store(json_encode(self::ensureIds($classes), JSON_UNESCAPED_UNICODE));
         $response['success'] = true;
         $response['message'] = "Updated one class";
         return $response;
@@ -304,15 +723,9 @@ class Classification extends Model
      */
     public function destroy(int $id): array // Geometry columns
     {
-        $arr = [];
-        $classes = $this->getAll();
-        unset($classes['data'][$id]);
-        foreach ($classes['data'] as $value) { // Reindex array
-            unset($value['id']);
-            $arr[] = $value;
-        }
-        $classes['data'] = $arr;
-        $this->store(json_encode($classes['data'], JSON_UNESCAPED_UNICODE));
+        $classes = array_map([self::class, 'normalizeClass'], $this->readRawClasses());
+        array_splice($classes, $id, 1);
+        $this->store(json_encode(self::ensureIds($classes), JSON_UNESCAPED_UNICODE));
         $response['success'] = true;
         $response['message'] = "Deleted one class";
         return $response;
@@ -357,7 +770,7 @@ class Classification extends Model
         $layer = new Layer(connection: $this->connection);
         $geometryType = $this->geometryType ?: $layer->getValueFromKey($this->layer, "type");
         $classes = [self::createClass($geometryType, $layer->getValueFromKey($this->layer, "f_table_title") ?: $layer->getValueFromKey($this->layer, "f_table_name"), null, 10, "#" . $color, $data)];
-        if (!empty($data->custom) && $data->custom->force) {
+        if ($data->custom->force) {
             $this->storeForce(json_encode($classes, JSON_UNESCAPED_UNICODE));
         } else {
             $this->storeFromWizard(json_encode($classes, JSON_UNESCAPED_UNICODE));
@@ -660,51 +1073,70 @@ class Classification extends Model
             $symbol = $data->symbol ?? "circle";
             $size = $data->symbolSize ?? 10;
         }
-        return (object)[
-            "sortid" => $sortid,
-            "name" => $name,
-            "expression" => $expression,
-            "label" => !empty($data->labelText),
-            "label_size" => !empty($data->labelSize) ? $data->labelSize : "",
-            "label_color" => !empty($data->labelColor) ? $data->labelColor : "",
+        $styles = [(object)[
+            "sortid" => 10,
+            "name" => "Symbol 1",
             "color" => $color,
             "outlinecolor" => !empty($outlineColor) ? $outlineColor : "",
             "symbol" => $symbol,
             "angle" => !empty($data->angle) ? $data->angle : "",
             "size" => $size,
             "width" => !empty($data->lineWidth) ? $data->lineWidth : "",
-            "overlaycolor" => !empty($data->overlayColor) ? $data->overlayColor : "",
-            "overlayoutlinecolor" => "",
-            "overlaysymbol" => !empty($data->overlaySymbol) ? $data->overlaySymbol : "",
-            "overlaysize" => !empty($data->overlaySize) ? $data->overlaySize : "",
-            "overlaywidth" => "",
-            "label_text" => !empty($data->labelText) ? $data->labelText : "",
-            "label_position" => !empty($data->labelPosition) ? $data->labelPosition : "",
-            "label_font" => !empty($data->labelFont) ? $data->labelFont : "",
-            "label_fontweight" => !empty($data->labelFontWeight) ? $data->labelFontWeight : "",
-            "label_angle" => !empty($data->labelAngle) ? $data->labelAngle : "",
-            "label_backgroundcolor" => !empty($data->labelBackgroundcolor) ? $data->labelBackgroundcolor : "",
-            "style_opacity" => !empty($data->opacity) ? $data->opacity : "",
-            "overlaystyle_opacity" => !empty($data->overlayOpacity) ? $data->overlayOpacity : "",
-            "label_force" => !empty($data->force) ? $data->force : "",
+            "opacity" => !empty($data->opacity) ? $data->opacity : "",
             "gap" => !empty($data->gap) ? $data->gap : "",
             "minsize" => !empty($data->minsize) ? $data->minsize : "",
             "maxsize" => !empty($data->maxsize) ? $data->maxsize : "",
-            "style_offsetx" => !empty($data->style_offsetx) ? $data->style_offsetx : "",
-            "style_offsety" => !empty($data->style_offsety) ? $data->style_offsety : "",
-            "style_polaroffsetr" => !empty($data->style_polaroffsetr) ? $data->style_polaroffsetr : "",
-            "style_polaroffsetd" => !empty($data->style_polaroffsetd) ? $data->style_polaroffsetd : "",
-            "label_outlinecolor" => !empty($data->label_outlinecolor) ? $data->label_outlinecolor : "",
-            "label_buffer" => !empty($data->label_buffer) ? $data->label_buffer : "",
-            "label_repeatdistance" => !empty($data->label_repeatdistance) ? $data->label_repeatdistance : "",
-            "label_backgroundpadding" => !empty($data->label_backgroundpadding) ? $data->label_backgroundpadding : "",
-            "label_offsetx" => !empty($data->label_offsetx) ? $data->label_offsetx : "",
-            "label_offsety" => !empty($data->label_offsety) ? $data->label_offsety : "",
-            "label_expression" => !empty($data->label_expression) ? $data->label_expression : "",
-            "label_maxsize" => !empty($data->label_maxsize) ? $data->label_maxsize : "",
-            "label_minfeaturesize" => !empty($data->label_minfeaturesize) ? $data->label_minfeaturesize : "",
-            "label_minscaledenom" => !empty($data->label_minscaledenom) ? $data->label_minscaledenom : "",
-            "label_maxscaledenom" => !empty($data->label_maxscaledenom) ? $data->label_maxscaledenom : "",
+            "offsetx" => !empty($data->offsetx) ? $data->offsetx : "",
+            "offsety" => !empty($data->offsety) ? $data->offsety : "",
+            "polaroffsetr" => !empty($data->polaroffsetr) ? $data->polaroffsetr : "",
+            "polaroffsetd" => !empty($data->polaroffsetd) ? $data->polaroffsetd : "",
+        ]];
+        if (!empty($data->overlayColor) || !empty($data->overlaySymbol) || !empty($data->overlaySize) || !empty($data->overlayOpacity)) {
+            $styles[] = (object)[
+                "sortid" => 20,
+                "name" => "Symbol 2",
+                "color" => !empty($data->overlayColor) ? $data->overlayColor : "",
+                "outlinecolor" => "",
+                "symbol" => !empty($data->overlaySymbol) ? $data->overlaySymbol : "",
+                "size" => !empty($data->overlaySize) ? $data->overlaySize : "",
+                "width" => "",
+                "opacity" => !empty($data->overlayOpacity) ? $data->overlayOpacity : "",
+            ];
+        }
+        $labels = [];
+        if (!empty($data->labelText)) {
+            $labels[] = (object)[
+                "sortid" => 10,
+                "name" => "Label 1",
+                "on" => true,
+                "text" => $data->labelText,
+                "size" => !empty($data->labelSize) ? $data->labelSize : "",
+                "color" => !empty($data->labelColor) ? $data->labelColor : "",
+                "position" => !empty($data->labelPosition) ? $data->labelPosition : "",
+                "font" => !empty($data->labelFont) ? $data->labelFont : "",
+                "fontweight" => !empty($data->labelFontWeight) ? $data->labelFontWeight : "",
+                "angle" => !empty($data->labelAngle) ? $data->labelAngle : "",
+                "backgroundcolor" => !empty($data->labelBackgroundcolor) ? $data->labelBackgroundcolor : "",
+                "force" => !empty($data->force),
+                "outlinecolor" => !empty($data->label_outlinecolor) ? $data->label_outlinecolor : "",
+                "buffer" => !empty($data->label_buffer) ? $data->label_buffer : "",
+                "repeatdistance" => !empty($data->label_repeatdistance) ? $data->label_repeatdistance : "",
+                "backgroundpadding" => !empty($data->label_backgroundpadding) ? $data->label_backgroundpadding : "",
+                "offsetx" => !empty($data->label_offsetx) ? $data->label_offsetx : "",
+                "offsety" => !empty($data->label_offsety) ? $data->label_offsety : "",
+                "expression" => !empty($data->label_expression) ? $data->label_expression : "",
+                "maxsize" => !empty($data->label_maxsize) ? $data->label_maxsize : "",
+                "minfeaturesize" => !empty($data->label_minfeaturesize) ? $data->label_minfeaturesize : "",
+                "minscaledenom" => !empty($data->label_minscaledenom) ? $data->label_minscaledenom : "",
+                "maxscaledenom" => !empty($data->label_maxscaledenom) ? $data->label_maxscaledenom : "",
+            ];
+        }
+        return (object)[
+            "sortid" => $sortid,
+            "name" => $name,
+            "expression" => $expression,
+            "styles" => $styles,
+            "labels" => $labels,
         ];
     }
 }

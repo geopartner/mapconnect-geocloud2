@@ -1,7 +1,6 @@
 /*
  * @author     Martin Høgh <mh@mapcentia.com>
  * @copyright  2013-2019 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *  
  */
@@ -1029,7 +1028,8 @@ $(document).ready(function () {
                                                         if (!record.data.group) {
                                                             disabled = "";
                                                         } else {
-                                                            disabled = "disabled";
+                                                            // disabled = "disabled";
+                                                            disabled = "";
                                                         }
                                                         var retval =
                                                             '<input ' + disabled + ' data-key="' + _key_ + '" data-subuser="' + record.data.subuser + '" onclick="updatePrivileges(this.getAttribute(\'data-subuser\'),this.getAttribute(\'data-key\'),this.value)" type="radio" value="none" name="' + rowIndex + '"' + ((val === 'none' && !multiple) ? ' checked="checked"' : '') + '>&nbsp;' + __('None') + '&nbsp;&nbsp;&nbsp;' +
@@ -1468,13 +1468,6 @@ $(document).ready(function () {
                                                 var f = Ext.getCmp('detailform');
                                                 if (f.form.isValid()) {
                                                     var values = f.form.getValues();
-
-                                                    for (var key in values) {
-                                                        if (values.hasOwnProperty(key)) {
-                                                            values[key] = encodeURIComponent(values[key]);
-                                                        }
-                                                    }
-
                                                     var param = {
                                                         data: values
                                                     };
@@ -3041,8 +3034,6 @@ $(document).ready(function () {
         Ext.getCmp("a6").removeAll();
         Ext.getCmp("a8").removeAll();
         Ext.getCmp("a9").removeAll();
-        Ext.getCmp("a10").removeAll();
-        Ext.getCmp("a11").removeAll();
         Ext.getCmp("a12").removeAll();
         Ext.getCmp("a13").removeAll();
         Ext.getCmp("a14").removeAll();
@@ -3276,18 +3267,12 @@ $(document).ready(function () {
         var a3 = Ext.getCmp("a3");
         var a8 = Ext.getCmp("a8");
         var a9 = Ext.getCmp("a9");
-        var a10 = Ext.getCmp("a10");
-        var a11 = Ext.getCmp("a11");
         a3.remove(wmsClass.grid);
         a8.remove(wmsClass.grid2);
         a9.remove(wmsClass.grid3);
-        a10.remove(wmsClass.grid4);
-        a11.remove(wmsClass.grid5);
         a3.doLayout();
         a8.doLayout();
         a9.doLayout();
-        a10.doLayout();
-        a11.doLayout();
 
         Ext.getCmp("layerStyleTabs").activate(activeTab);
         var a13 = Ext.getCmp("a13");
@@ -3645,44 +3630,8 @@ $(document).ready(function () {
                                                                                 {
                                                                                     text: '<i class="fa fa-check"></i> ' + __('Update'),
                                                                                     handler: function () {
-                                                                                        var grid = Ext.getCmp("propGrid");
-                                                                                        var grid2 = Ext.getCmp("propGrid2");
-                                                                                        var grid3 = Ext.getCmp("propGrid3");
-                                                                                        var grid4 = Ext.getCmp("propGrid4");
-                                                                                        var grid5 = Ext.getCmp("propGrid5");
-                                                                                        var source = grid.getSource();
-                                                                                        jQuery.extend(source, grid2.getSource());
-                                                                                        jQuery.extend(source, grid3.getSource());
-                                                                                        jQuery.extend(source, grid4.getSource());
-                                                                                        jQuery.extend(source, grid5.getSource());
-                                                                                        var param = {
-                                                                                            data: source
-                                                                                        };
-                                                                                        param = Ext.util.JSON.encode(param);
-
-                                                                                        Ext.Ajax.request({
-                                                                                            url: '/controllers/classification/index/' + wmsClasses.table + '/' + wmsClass.classId,
-                                                                                            method: 'put',
-                                                                                            params: param,
-                                                                                            headers: {
-                                                                                                'Content-Type': 'application/json; charset=utf-8'
-                                                                                            },
-                                                                                            success: function (response) {
-                                                                                                App.setAlert(App.STATUS_OK, __("Style is updated"));
-                                                                                                writeFiles(wmsClasses.table, map);
-                                                                                                wmsClasses.store.load();
-                                                                                                store.load();
-                                                                                            },
-                                                                                            failure: function (response) {
-                                                                                                Ext.MessageBox.show({
-                                                                                                    title: 'Failure',
-                                                                                                    msg: __(Ext.decode(response.responseText).message),
-                                                                                                    buttons: Ext.MessageBox.OK,
-                                                                                                    width: 400,
-                                                                                                    height: 300,
-                                                                                                    icon: Ext.MessageBox.ERROR
-                                                                                                });
-                                                                                            }
+                                                                                        wmsClass.save(function () {
+                                                                                            store.load();
                                                                                         });
                                                                                     }
                                                                                 }
@@ -3696,24 +3645,13 @@ $(document).ready(function () {
                                                                                 {
                                                                                     xtype: "panel",
                                                                                     id: "a8",
-                                                                                    title: "Symbol1"
+                                                                                    title: "Symbols"
                                                                                 },
                                                                                 {
                                                                                     xtype: "panel",
                                                                                     id: "a9",
-                                                                                    title: "Symbol2"
-                                                                                },
-                                                                                {
-                                                                                    xtype: "panel",
-                                                                                    id: "a10",
-                                                                                    title: "Label1"
-                                                                                },
-                                                                                {
-                                                                                    xtype: "panel",
-                                                                                    id: "a11",
-                                                                                    title: "Label2"
+                                                                                    title: "Labels"
                                                                                 }
-
                                                                             ]
                                                                         }]
                                                                     }
@@ -5086,9 +5024,6 @@ $(document).ready(function () {
 /**
  * Setup checks for session and schema in session
  */
-
-// This creates alot of unwanted traffic from the browser to the server, as it checks the session every 2 seconds.
-// Because of scaling, we have some bad-gateway issues if we check too frequently, alså remove the generic error alert.
 setInterval(function () {
     $.ajax({
         url: '/api/v2/session',
@@ -5103,10 +5038,10 @@ setInterval(function () {
             }
         },
         error: function () {
-            //alert("Noget gik galt. Prøv at refreshe din browser");
+            alert("Noget gik galt. Prøv at refreshe din browser");
         }
     });
-}, 10000);
+}, 2000);
 
 
 function startWfsEdition(layerName, geomField, wfsFilter, single, timeSlice) {

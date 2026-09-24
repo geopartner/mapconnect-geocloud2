@@ -12,6 +12,7 @@ use app\conf\Connection;
 use app\inc\Model;
 use app\inc\Util;
 use PDOException;
+use PDOStatement;
 use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
 use Psr\Cache\InvalidArgumentException;
 
@@ -27,7 +28,6 @@ class Mapfile extends Model
     {
         parent::__construct(connection: $connection);
         $this->mapServerHost = Connection::$param['mapserverhost'] ?? $this->connection->host;
-        $this->mapServerPort = Connection::$param['mapserverport'] ?? $this->connection->port;
         $settings = new Setting(connection: $connection);
         $extents = $settings->get()["data"]->extents ?? null;
         $schema = $this->connection->schema;
@@ -41,7 +41,7 @@ class Mapfile extends Model
      */
     public function transformBbox(int $targetSrid): array
     {
-        $sql = "WITH box AS (SELECT ST_extent(st_transform(ST_MakeEnvelope({$this->bbox[0]},{$this->bbox[1]},{$this->bbox[2]},{$this->bbox[3]},3857),{$targetSrid})) AS a) SELECT ST_xmin(a) AS xmin, ST_ymin(a) AS ymin, ST_xmax(a) AS xmax, ST_ymax(a) AS ymax FROM box";
+        $sql = "WITH box AS (SELECT ST_extent(st_transform(ST_MakeEnvelope({$this->bbox[0]},{$this->bbox[1]},{$this->bbox[2]},{$this->bbox[3]},3857),$targetSrid)) AS a) SELECT ST_xmin(a) AS xmin, ST_ymin(a) AS ymin, ST_xmax(a) AS xmax, ST_ymax(a) AS ymax FROM box";
         $result = $this->prepare($sql);
         try {
             $result->execute();
@@ -55,7 +55,7 @@ class Mapfile extends Model
     /**
      * Fetch all OWS-enabled layers for the current schema.
      */
-    public function getOwsLayerRows(): \PDOStatement
+    public function getOwsLayerRows(): PDOStatement
     {
         $sql = "SELECT * FROM settings.getColumns('f_table_schema=''{$this->connection->schema}'' AND enableows=true','raster_columns.r_table_schema=''{$this->connection->schema}'' AND enableows=true') ORDER BY sort_id";
         return $this->execQuery($sql);
@@ -64,6 +64,7 @@ class Mapfile extends Model
     /**
      * Prepare all shared layer data needed for both WMS and WFS mapfile generation.
      * Returns null if the layer should be skipped.
+     * @throws \Throwable
      */
     public function prepareLayerData(array $row, bool $filterBytea = false): ?array
     {
@@ -207,7 +208,7 @@ class Mapfile extends Model
         $s = "user=" . $this->connection->user;
         $s .= " dbname=" . $this->connection->database;
         $s .= " host=" . $this->mapServerHost;
-        $s .= " port=" . $this->mapServerPort;
+        $s .= " port=" . $this->connection->port;
         if ($this->connection->password) {
             $s .= " password=" . $this->connection->password;
         }
@@ -785,132 +786,96 @@ SYMBOLS;
     }
 
     /**
-     * Render a MapServer STYLE block.
-     * @param string $prefix '' for primary style, 'overlay' for overlay style
+     * Render a MapServer STYLE block from a single style entry (new format, un-prefixed keys).
      */
-    public function renderStyle(array $class, string $prefix = ''): string
+    public static function renderStyle(array $style): string
     {
-        $p = $prefix;
         $s = "STYLE\n";
 
-        // SYMBOL
-        if (!empty($class[$p . 'symbol'])) {
-            $sym = $class[$p . 'symbol'];
+        if (!empty($style['symbol'])) {
+            $sym = $style['symbol'];
             $d = str_starts_with($sym, "[") ? "" : "'";
             $s .= "SYMBOL {$d}{$sym}{$d}\n";
         }
+        if (!empty($style['pattern'])) $s .= "PATTERN {$style['pattern']} END\n";
+        if (!empty($style['linecap'])) $s .= "LINECAP {$style['linecap']}\n";
+        if (!empty($style['width'])) $s .= "WIDTH " . self::addSquareBracket($style['width']) . "\n";
+        if (!empty($style['color'])) $s .= "COLOR " . Util::hex2RGB($style['color'], true, " ") . "\n";
+        if (!empty($style['outlinecolor'])) $s .= "OUTLINECOLOR " . Util::hex2RGB($style['outlinecolor'], true, " ") . "\n";
+        if (!empty($style['opacity'])) $s .= "OPACITY {$style['opacity']}\n";
+        if (!empty($style['size'])) $s .= "SIZE " . self::addSquareBracket($style['size']) . "\n";
 
-        // PATTERN
-        if (!empty($class[$p . 'pattern'])) $s .= "PATTERN {$class[$p . 'pattern']} END\n";
-
-        // LINECAP
-        if (!empty($class[$p . 'linecap'])) $s .= "LINECAP {$class[$p . 'linecap']}\n";
-
-        // WIDTH
-        if (!empty($class[$p . 'width'])) {
-            $s .= "WIDTH " . (is_numeric($class[$p . 'width']) ? $class[$p . 'width'] : "[{$class[$p . 'width']}]") . "\n";
-        }
-
-        // COLOR
-        if (!empty($class[$p . 'color'])) $s .= "COLOR " . Util::hex2RGB($class[$p . 'color'], true, " ") . "\n";
-
-        // OUTLINECOLOR
-        if (!empty($class[$p . 'outlinecolor'])) $s .= "OUTLINECOLOR " . Util::hex2RGB($class[$p . 'outlinecolor'], true, " ") . "\n";
-
-        // OPACITY
-        if (!empty($class[$p . 'style_opacity'])) $s .= "OPACITY {$class[$p . 'style_opacity']}\n";
-
-        // SIZE
-        if (!empty($class[$p . 'size'])) {
-            $s .= "SIZE " . (is_numeric($class[$p . 'size']) ? $class[$p . 'size'] : "[{$class[$p . 'size']}]") . "\n";
-        }
-
-        // ANGLE
-        if (!empty($class[$p . 'angle'])) {
-            $angle = $class[$p . 'angle'];
+        if (!empty($style['angle'])) {
+            $angle = $style['angle'];
             if (is_numeric($angle) && ((int)$angle > 360 || (int)$angle < -360)) $angle = '0';
             $s .= (is_numeric($angle) || strtolower($angle) == "auto")
                 ? "ANGLE {$angle}\n"
                 : "ANGLE [{$angle}]\n";
         }
 
-        // GAP
-        if (!empty($class[$p . 'gap'])) $s .= "GAP {$class[$p . 'gap']}\n";
+        if (!empty($style['gap'])) $s .= "GAP {$style['gap']}\n";
+        if (!empty($style['geomtransform'])) $s .= "GEOMTRANSFORM '{$style['geomtransform']}'\n";
+        if (!empty($style['minsize'])) $s .= "MINSIZE {$style['minsize']}\n";
+        if (!empty($style['maxsize'])) $s .= "MAXSIZE {$style['maxsize']}\n";
 
-        // GEOMTRANSFORM
-        if (!empty($class[$p . 'geomtransform'])) $s .= "GEOMTRANSFORM '{$class[$p . 'geomtransform']}'\n";
-
-        // MINSIZE / MAXSIZE (primary style only)
-        if ($prefix === '') {
-            if (!empty($class['minsize'])) $s .= "MINSIZE {$class['minsize']}\n";
-            if (!empty($class['maxsize'])) $s .= "MAXSIZE {$class['maxsize']}\n";
-        }
-
-        // OFFSET
-        $s .= "OFFSET " . $this->renderOffsetPair($class, $p . 'style_offsetx', $p . 'style_offsety') . "\n";
-
-        // POLAROFFSET
-        $s .= "POLAROFFSET " . $this->renderOffsetPair($class, $p . 'style_polaroffsetr', $p . 'style_polaroffsetd') . "\n";
+        $s .= "OFFSET " . self::renderOffsetPair($style, 'offsetx', 'offsety') . "\n";
+        $s .= "POLAROFFSET " . self::renderOffsetPair($style, 'polaroffsetr', 'polaroffsetd') . "\n";
 
         $s .= "\nEND # style\n";
         return $s;
     }
 
-    private function renderOffsetPair(array $class, string $xKey, string $yKey): string
+    private static function renderOffsetPair(array $entry, string $xKey, string $yKey): string
     {
-        $x = !empty($class[$xKey]) ? (is_numeric($class[$xKey]) ? $class[$xKey] : "[{$class[$xKey]}]") : "0";
-        $y = !empty($class[$yKey]) ? (is_numeric($class[$yKey]) ? $class[$yKey] : "[{$class[$yKey]}]") : "0";
+        $x = !empty($entry[$xKey]) ? self::addSquareBracket($entry[$xKey]) : "0";
+        $y = !empty($entry[$yKey]) ? self::addSquareBracket($entry[$yKey]) : "0";
         return "{$x} {$y}";
     }
 
     /**
-     * Render a MapServer LABEL block.
-     * @param string $num '' for label 1, '2' for label 2
+     * Render a MapServer LABEL block from a single label entry (new format, un-prefixed keys).
+     * $n is the 1-based label index, used only in the comment markers that
+     * Wms.php's disableLabels sed command targets.
      */
-    public function renderLabel(array $class, string $layerName, string $num = ''): string
+    public static function renderLabel(array $label, string $layerName, int $n): string
     {
-        $enableKey = "label" . $num;
-        if (empty($class[$enableKey])) return '';
-
-        $p = "label{$num}_";
-        $n = $num ?: '1';
+        if (empty($label['on'])) return '';
 
         $s = "#START_LABEL{$n}_{$layerName}\n\n";
         $s .= "LABEL\n";
-        if (!empty($class[$p . 'text'])) $s .= "TEXT '{$class[$p . 'text']}'\n";
+        if (!empty($label['text'])) $s .= "TEXT '{$label['text']}'\n";
         $s .= "TYPE truetype\n";
-        $s .= "FONT " . ($class[$p . 'font'] ?: "arial") . ($class[$p . 'fontweight'] ?: "normal") . "\n";
+        $s .= "FONT " . (!empty($label['font']) ? $label['font'] : "arial")
+            . (!empty($label['fontweight']) ? $label['fontweight'] : "normal") . "\n";
 
-        // SIZE
-        if (!empty($class[$p . 'size'])) {
-            $s .= "SIZE " . (is_numeric($class[$p . 'size']) ? $class[$p . 'size'] : "[{$class[$p . 'size']}]") . "\n";
+        if (!empty($label['size'])) {
+            $s .= "SIZE " . self::addSquareBracket($label['size']) . "\n";
         } else {
             $s .= "SIZE 11\n";
         }
 
-        $s .= "COLOR " . (!empty($class[$p . 'color']) ? Util::hex2RGB($class[$p . 'color'], true, " ") : "1 1 1") . "\n";
-        $s .= "OUTLINECOLOR " . (!empty($class[$p . 'outlinecolor']) ? Util::hex2RGB($class[$p . 'outlinecolor'], true, " ") : "255 255 255") . "\n";
+        $s .= "COLOR " . (!empty($label['color']) ? Util::hex2RGB($label['color'], true, " ") : "1 1 1") . "\n";
+        $s .= "OUTLINECOLOR " . (!empty($label['outlinecolor']) ? Util::hex2RGB($label['outlinecolor'], true, " ") : "255 255 255") . "\n";
         $s .= "SHADOWSIZE 2 2\n";
         $s .= "ANTIALIAS true\n";
-        $s .= "FORCE " . (!empty($class[$p . 'force']) ? "true" : "false") . "\n";
-        $s .= "POSITION " . (!empty($class[$p . 'position']) ? $class[$p . 'position'] : "auto") . "\n";
+        $s .= "FORCE " . (!empty($label['force']) ? "true" : "false") . "\n";
+        $s .= "POSITION " . (!empty($label['position']) ? $label['position'] : "auto") . "\n";
         $s .= "PARTIALS false\n";
         $s .= "MINSIZE 1\n";
 
-        if (!empty($class[$p . 'maxsize'])) $s .= "MAXSIZE {$class[$p . 'maxsize']}\n";
-        if (!empty($class[$p . 'maxscaledenom'])) $s .= "MAXSCALEDENOM {$class[$p . 'maxscaledenom']}\n";
-        if (!empty($class[$p . 'minscaledenom'])) $s .= "MINSCALEDENOM {$class[$p . 'minscaledenom']}\n";
-        if (!empty($class[$p . 'buffer'])) $s .= "BUFFER {$class[$p . 'buffer']}\n";
-        if (!empty($class[$p . 'repeatdistance'])) $s .= "REPEATDISTANCE {$class[$p . 'repeatdistance']}\n";
-        if (!empty($class[$p . 'minfeaturesize'])) $s .= "MINFEATURESIZE {$class[$p . 'minfeaturesize']}\n";
+        if (!empty($label['maxsize'])) $s .= "MAXSIZE {$label['maxsize']}\n";
+        if (!empty($label['maxscaledenom'])) $s .= "MAXSCALEDENOM {$label['maxscaledenom']}\n";
+        if (!empty($label['minscaledenom'])) $s .= "MINSCALEDENOM {$label['minscaledenom']}\n";
+        if (!empty($label['buffer'])) $s .= "BUFFER {$label['buffer']}\n";
+        if (!empty($label['repeatdistance'])) $s .= "REPEATDISTANCE {$label['repeatdistance']}\n";
+        if (!empty($label['minfeaturesize'])) $s .= "MINFEATURESIZE {$label['minfeaturesize']}\n";
 
-        if (!empty($class[$p . 'expression'])) {
-            $s .= "EXPRESSION ({$class[$p . 'expression']})\n";
+        if (!empty($label['expression'])) {
+            $s .= "EXPRESSION ({$label['expression']})\n";
         }
 
-        // ANGLE
-        if (!empty($class[$p . 'angle'])) {
-            $angle = $class[$p . 'angle'];
+        if (!empty($label['angle'])) {
+            $angle = $label['angle'];
             if (is_numeric($angle) && ((int)$angle > 360 || (int)$angle < -360)) $angle = '0';
             $s .= (is_numeric($angle) || $angle == 'auto' || $angle == 'auto2' || $angle == 'follow')
                 ? "ANGLE {$angle}\n"
@@ -918,25 +883,16 @@ SYMBOLS;
         }
 
         $s .= "WRAP \"\\n\"\n\n";
-        $s .= "OFFSET " . (!empty($class[$p . 'offsetx']) ? $class[$p . 'offsetx'] : "0") . " " . (!empty($class[$p . 'offsety']) ? $class[$p . 'offsety'] : "0") . "\n\n\n";
+        $s .= "OFFSET " . (!empty($label['offsetx']) ? $label['offsetx'] : "0") . " " . (!empty($label['offsety']) ? $label['offsety'] : "0") . "\n\n\n";
 
         // Label background style
         $s .= "STYLE\n";
-        if (!empty($class[$p . 'backgroundcolor'])) {
-            $bgColor = Util::hex2RGB($class[$p . 'backgroundcolor'], true, " ");
+        if (!empty($label['backgroundcolor'])) {
+            $bgColor = Util::hex2RGB($label['backgroundcolor'], true, " ");
             $s .= "GEOMTRANSFORM 'labelpoly'\n";
             $s .= "COLOR {$bgColor}\n";
-            if ($num === '') {
-                // Label 1: always output outline + width with default
-                $s .= "OUTLINECOLOR {$bgColor}\n";
-                $s .= "WIDTH " . ($class[$p . 'backgroundpadding'] ?: "1") . "\n";
-            } else {
-                // Label 2: only if padding is set
-                if (!empty($class[$p . 'backgroundpadding'])) {
-                    $s .= "OUTLINECOLOR {$bgColor}\n";
-                    $s .= "WIDTH {$class[$p . 'backgroundpadding']}\n";
-                }
-            }
+            $s .= "OUTLINECOLOR {$bgColor}\n";
+            $s .= "WIDTH " . (!empty($label['backgroundpadding']) ? $label['backgroundpadding'] : "1") . "\n";
         }
         $s .= "END # STYLE\n";
         $s .= "END\n";
@@ -944,7 +900,7 @@ SYMBOLS;
         return $s;
     }
 
-    public function renderLeader(array $class): string
+    public static function renderLeader(array $class): string
     {
         if (empty($class['leader'])) return '';
 
@@ -959,12 +915,15 @@ SYMBOLS;
     }
 
     /**
-     * Render all CLASS blocks for a layer.
+     * Render all CLASS blocks for a layer. Accepts classes in either the legacy flat
+     * format or the new styles[]/labels[] format — each class is normalized first,
+     * so raw, non-converted JSON from the database renders correctly.
      */
-    public function renderClasses(array $classData, array $layerArr, string $layerName): string
+    public static function renderClasses(array $classData, array $layerArr, string $layerName): string
     {
         $s = '';
         foreach ($classData as $class) {
+            $class = Classification::normalizeClass((array)$class);
             $s .= "CLASS\n";
 
             // NAME
@@ -982,20 +941,30 @@ SYMBOLS;
             }
 
             // Scale denominators
-            if (!empty($class['class_maxscaledenom'])) $s .= "MAXSCALEDENOM {$class['class_maxscaledenom']}\n";
-            if (!empty($class['class_minscaledenom'])) $s .= "MINSCALEDENOM {$class['class_minscaledenom']}\n";
+            if (!empty($class['maxscaledenom'])) $s .= "MAXSCALEDENOM {$class['maxscaledenom']}\n";
+            if (!empty($class['minscaledenom'])) $s .= "MINSCALEDENOM {$class['minscaledenom']}\n";
 
-            // Primary style + overlay style
-            $s .= $this->renderStyle($class);
-            $s .= $this->renderStyle($class, 'overlay');
+            // Styles, ordered by sortid (usort is stable in PHP 8)
+            $styles = $class['styles'];
+            usort($styles, fn($a, $b) => (int)($a['sortid'] ?? 0) <=> (int)($b['sortid'] ?? 0));
+            foreach ($styles as $style) {
+                $s .= self::renderStyle($style);
+            }
 
-            // Labels
-            $s .= $this->renderLabel($class, $layerName);
-            $s .= "#LABEL2\n";
-            $s .= $this->renderLabel($class, $layerName, '2');
+            // Labels, ordered by sortid, numbered sequentially for the markers
+            $labels = $class['labels'];
+            usort($labels, fn($a, $b) => (int)($a['sortid'] ?? 0) <=> (int)($b['sortid'] ?? 0));
+            $n = 1;
+            foreach ($labels as $label) {
+                $rendered = self::renderLabel($label, $layerName, $n);
+                if ($rendered !== '') {
+                    $s .= $rendered;
+                    $n++;
+                }
+            }
 
             // Leader
-            $s .= $this->renderLeader($class);
+            $s .= self::renderLeader($class);
 
             $s .= "END # Class\n";
         }
@@ -1014,7 +983,19 @@ SYMBOLS;
     }
 
     /**
-     * @throws PhpfastcacheInvalidArgumentException
+     * Wraps the provided value with square brackets if it is not numeric.
+     * If the value already contains square brackets, they are trimmed first before reapplying them.
+     *
+     * @param string|int|float $value The input value to process, which can be of any type.
+     * @return string|int|float The input value wrapped with square brackets if it is not numeric.
+     */
+    private static function addSquareBracket(string|int|float $value): string|int|float
+    {
+        if (is_numeric($value)) return $value;
+        return '[' . trim($value, "[]") . ']';
+    }
+
+    /**
      */
     public function generateWms(): string
     {
@@ -1036,6 +1017,7 @@ SYMBOLS;
 
         // Output formats
         $s .= "OUTPUTFORMAT\nNAME \"png\"\nDRIVER AGG/PNG\nMIMETYPE \"image/png\"\nIMAGEMODE RGBA\nEXTENSION \"png\"\nTRANSPARENT ON\nFORMATOPTION \"GAMMA=0.75\"\nEND\n\n";
+        $s .= "OUTPUTFORMAT\nNAME \"jpeg\"\nDRIVER AGG/JPEG\nMIMETYPE \"image/jpeg\"\nIMAGEMODE RGB\nEXTENSION \"jpg\"\nFORMATOPTION \"QUALITY=85\"\nEND\n\n";
         $s .= "OUTPUTFORMAT\nNAME \"utfgrid\"\nDRIVER UTFGRID\nMIMETYPE \"application/json\"\nEXTENSION \"json\"\nFORMATOPTION \"UTFRESOLUTION=4\"\nFORMATOPTION \"DUPLICATES=false\"\nEND\n\n";
 
         $s .= "#CONFIG \"MS_ERRORFILE\" \"/var/www/geocloud2/app/wms/mapfiles/ms_error.txt\"\n";
@@ -1309,7 +1291,7 @@ SYMBOLS;
             if (!empty($fields)) {
                 foreach ($fields as $field => $name) {
                     if (isset($layerData['filteredMeta'][$field]) && !empty($name["mouseover"])) {
-                        $fieldsArr[] = "\\\"{$field}\\\":\\\"[{$field}]\\\"";
+                        $fieldsArr[] = "\\\"$field\\\":\\\"[$field]\\\"";
                     }
                 }
             }

@@ -1,8 +1,7 @@
 <?php
 /**
- * @author     Martin Høgh <mh@mapcentia.com>
+ * @author     Martin Høgh <mh@mapcentia.com>, Rene Borella <rgb@mapster.dk>
  * @copyright  2013-2024 MapCentia ApS
- * @copyright  2026-     Geopartner Landinspektører A/S
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  *
  */
@@ -10,10 +9,8 @@
 ini_set("display_errors", "no");
 //ini_set("display_errors", "yes");
 error_reporting(E_ERROR | E_WARNING | E_PARSE | E_DEPRECATED | E_USER_DEPRECATED);
-//error_reporting(E_ALL);
 
-// Handle compression at apache-level
-ob_start();
+//error_reporting(E_ALL);
 
 use app\api\v4\Controller;
 use app\api\v4\Scope;
@@ -128,8 +125,11 @@ function setHeaders(): void
     } elseif (isset(App::$param["AccessControlAllowOrigin"]) && App::$param["AccessControlAllowOrigin"][0] == "*") {
         header("Access-Control-Allow-Origin: *");
     }
-
-    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control");
+    // Range/If-Range let browser clients (and DuckDB-wasm) fetch byte ranges of
+    // snapshot Parquet files; the exposed headers let scripts read the sizes,
+    // ranges and ETags those responses carry.
+    header("Access-Control-Allow-Headers: Origin, Content-Type, Authorization, X-Requested-With, Accept, Session, Cache-Control, Range, If-Range");
+    header("Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified, Location");
     header("Access-Control-Allow-Credentials: true");
     header("Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS");
 
@@ -159,28 +159,17 @@ try {
         $db = $dbSplit[1] ?? $dbSplit[0];
         // parentUser is superuser
         $parentUser = $user == $db;
-
-        // Get database from path
-        $db = Util::extractDatabaseName(Input::getPath()->part(2));
-        
         Database::setDb($db);
         Connection::$param["postgisschema"] = Input::getPath()->part(3);
         include_once("app/wfs/server.php");
         \app\wfs\bootstrap_legacy_wfs($db, $user, $parentUser);
-
     } elseif (Input::getPath()->part(1) == "wms" || Input::getPath()->part(1) == "ows") {
         setHeaders();
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
             Session::start();
         }
-
-        //$dbSplit = explode("@", Input::getPath()->part(2));
-        //Database::setDb($dbSplit[1] ?? $dbSplit[0]);
-
-        // Get database from path
-        $db = Util::extractDatabaseName(Input::getPath()->part(2));
-        Database::setDb($db);
-
+        $dbSplit = explode("@", Input::getPath()->part(2));
+        Database::setDb($dbSplit[1] ?? $dbSplit[0]);
         new Wms();
     }
 } catch (OwsException|ServiceException $exception) {
@@ -229,7 +218,7 @@ foreach (glob(dirname(__FILE__) . "/../app/api/v4/controllers/*.php") as $filena
 $handler = static function () use ($routes) {
     setHeaders();
     try {
-        if (in_array(Input::getPath()->part(1), ['api', 'auth', 'signin', 'signup', 'signout', 'forgot', 'activation', 'device', 'github'])) {
+        if (in_array(Input::getPath()->part(1), ['api', 'auth', 'signin', 'signup', 'signout', 'forgot', 'activation', 'device', 'github', 'google', 'gitlab'])) {
 
             if ($db = Input::getPath()->part(4)) {
                 Database::setDb($db); // Default
@@ -260,13 +249,10 @@ $handler = static function () use ($routes) {
                     Session::start();
                 }
                 $db = Input::getPath()->part(4);
-
-                $db = Util::extractDatabaseName($db);
-                //$dbSplit = explode("@", $db);
-                //if (sizeof($dbSplit) == 2) {
-                //    $db = $dbSplit[1];
-                //}
-
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v1/elasticsearch/{action}/{user}/[indices]/[type]", function () {
@@ -292,13 +278,10 @@ $handler = static function () use ($routes) {
                 }
                 $r = func_get_arg(0);
                 $db = $r["user"];
-
-                $db = Util::extractDatabaseName($db);
-                //$dbSplit = explode("@", $db);
-                //if (sizeof($dbSplit) == 2) {
-                //    $db = $dbSplit[1];
-                //}
-
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/elasticsearch/{action}/{user}/{schema}/[rel]/[id]", function () {
@@ -309,29 +292,26 @@ $handler = static function () use ($routes) {
             });
             Route::add("api/v2/feature/{user}/{layer}/{srid}/[key]", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
-                //$dbSplit = explode("@", $db);
-                //if (sizeof($dbSplit) == 2) {
-                //    $db = $dbSplit[1];
-                //}
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/keyvalue/{user}/[key]", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
-                //$dbSplit = explode("@", $db);
-                //if (sizeof($dbSplit) == 2) {
-                //    $db = $dbSplit[1];
-                //}
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/preparedstatement/{user}", function () {
                 $db = Route::getParam("user");
-                $db = Util::extractDatabaseName($db);
-                //$dbSplit = explode("@", $db);
-                //if (sizeof($dbSplit) == 2) {
-                //    $db = $dbSplit[1];
-                //}
+                $dbSplit = explode("@", $db);
+                if (sizeof($dbSplit) == 2) {
+                    $db = $dbSplit[1];
+                }
                 Database::setDb($db);
             });
             Route::add("api/v2/qgis/{action}/{user}", function () {
@@ -408,6 +388,17 @@ $handler = static function () use ($routes) {
                     echo Response::toJson($jwt);
                 }
             });
+            Route::add("api/v3/scheduler/{uuid}", function () {
+                $jwt = Jwt::validate();
+                if ($jwt["success"]) {
+                    if (!$jwt["data"]["superUser"]) {
+                        throw new GC2Exception(Response::SUPER_USER_ONLY['message'], 400);
+                    }
+                    Database::setDb("gc2scheduler");
+                } else {
+                    echo Response::toJson($jwt);
+                }
+            });
             Route::add("api/v3/scheduler", function () {
                 $jwt = Jwt::validate();
                 if ($jwt["success"]) {
@@ -480,28 +471,53 @@ $handler = static function () use ($routes) {
             // V4 with OAuth and Route2
             //==========================
             $Route2 = new Route2();
-            // Rate limit per JWT token for all API v4 routes
-            RateLimiter::consumeForJwt(Input::getJwtToken(), App::$param['apiV4']['rateLimitPerMinute'] ?? 120);
+            // Rate limit per JWT token for all API v4 routes. OWS (tile/GetMap) traffic — the
+            // v4 OWS endpoint and the OGC API map endpoints — gets a higher, separately
+            // configurable limit and its own counter bucket, so heavy image traffic can't 429
+            // ordinary v4 calls.
+            $requestPathForLimit = strtok($_SERVER['REQUEST_URI'] ?? '', '?');
+            $isOws = Input::getPath()->part(1) === 'api'
+                && Input::getPath()->part(2) === 'v4'
+                && (Input::getPath()->part(3) === 'ows'
+                    || (Input::getPath()->part(3) === 'ogc' && str_ends_with(rtrim((string)$requestPathForLimit, '/'), '/map')));
+            RateLimiter::consumeForJwt(
+                Input::getJwtToken(),
+                $isOws
+                    ? (App::$param['apiV4']['owsRateLimitPerMinute'] ?? 1200)
+                    : (App::$param['apiV4']['rateLimitPerMinute'] ?? 120),
+                $isOws ? 'ows' : 'api'
+            );
+            // At this point we just validate the token, but we do not yet know if the user is allowed to access the API
+            try {
+                $jwt = Jwt::validate();
+                $Route2->jwt = $jwt;
+                $validationError = null;
+            } catch (\Throwable $e) {
+                error_log('JWT-DEBUG validate failed: ' . get_class($e) . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+                $jwt = null;
+                $validationError = $e;
+            }
+
+            // Route candidates are dispatched most-specific first (fewest omitted
+            // trailing segments), so a parent route (…/tables/{table}) is not shadowed
+            // by a child whose optional tail can be omitted (…/tables/{table}/columns/[column]).
+            $requestUriForOrder = trim(strtok($_SERVER["REQUEST_URI"], '?'), "/");
             // First, go through PUBLIC routes before validating the token
-            foreach ($routes as $c => $r) {
-                if ($r->getScope() == Scope::PUBLIC) {
-                    $Route2->add($r->getRoute(), new $c($Route2, new \app\inc\Connection()));
-                }
+            $publicRoutes = array_filter($routes, fn($r) => $r->getScope() == Scope::PUBLIC);
+            foreach (Route2::orderBySpecificity($publicRoutes, $requestUriForOrder) as $c => $r) {
+                if ($jwt) $Route2->jwt = $jwt;
+                $Route2->add($r->getRoute(), new $c($Route2, new \app\inc\Connection()));
             }
             // Then go through non-PUBLIC routes
             if (!$Route2->isMatched) {
-                try {
-                    $jwt = Jwt::validate();
-                } catch (\Throwable $e) {
-                    error_log('JWT-DEBUG validate failed: ' . get_class($e) . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
-                    throw $e;
+                if ($validationError) {
+                    throw $validationError;
                 }
                 $Route2->jwt = $jwt;
                 $conn = new \app\inc\Connection(user: $jwt["data"]["uid"] ?? null, database: $jwt["data"]["database"] ?? null);
-                foreach ($routes as $c => $r) {
-                    if ($r->getScope() != Scope::PUBLIC) {
-                        $Route2->add($r->getRoute(), new $c($Route2, $conn));
-                    }
+                $nonPublicRoutes = array_filter($routes, fn($r) => $r->getScope() != Scope::PUBLIC);
+                foreach (Route2::orderBySpecificity($nonPublicRoutes, $requestUriForOrder) as $c => $r) {
+                    $Route2->add($r->getRoute(), new $c($Route2, $conn));
                 }
             }
             if ($Route2->isMatched) {
