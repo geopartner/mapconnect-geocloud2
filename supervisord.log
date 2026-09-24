@@ -1,0 +1,17 @@
+2026-09-24 12:58:48,668 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-09-24 12:58:48,674 INFO RPC interface 'supervisor' initialized
+2026-09-24 12:58:48,674 CRIT Server 'inet_http_server' running without any HTTP authentication checking
+2026-09-24 12:58:48,675 INFO supervisord started with pid 1
+2026-09-24 12:58:49,680 INFO spawned: 'cron' with pid 19
+2026-09-24 12:58:49,682 INFO spawned: 'php-fpm' with pid 20
+2026-09-24 12:58:49,683 INFO spawned: 'watch_mapcache' with pid 21
+2026-09-24 12:58:49,688 INFO spawned: 'apache2' with pid 22
+2026-09-24 12:58:49,692 INFO spawnerr: can't find command '/usr/local/bin/php-fpm-exporter'
+2026-09-24 12:58:51,101 INFO success: cron entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-09-24 12:58:51,101 INFO success: php-fpm entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-09-24 12:58:51,101 INFO success: watch_mapcache entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-09-24 12:58:51,102 INFO success: apache2 entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-09-24 12:58:51,102 INFO spawnerr: can't find command '/usr/local/bin/php-fpm-exporter'
+2026-09-24 12:58:53,104 INFO spawnerr: can't find command '/usr/local/bin/php-fpm-exporter'
+2026-09-24 12:58:56,109 INFO spawnerr: can't find command '/usr/local/bin/php-fpm-exporter'
+2026-09-24 12:58:56,112 INFO gave up: php_fpm_exporter entered FATAL state, too many start retries too quickly

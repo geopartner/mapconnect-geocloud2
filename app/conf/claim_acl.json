@@ -1,0 +1,28 @@
+{
+  "e2e": {
+    "groups->test_group": {
+      "__membership": [
+        "e2e_another_group"
+      ]
+    },
+    "organization->Geopartner": {
+      "__membership": [
+        "e2e_dv"
+      ]
+    }
+  },
+  "mapstatus": {
+    "groups->BL_ADMIN": {
+      "__membership": [
+        "mapstatus_brugere"
+      ]
+    }
+  },
+  "ny_kunde": {
+    "organization->Oesterenge_Vandvaerk": {
+      "__membership": [
+        "default_subuser"
+      ]
+    }
+  }
+}
