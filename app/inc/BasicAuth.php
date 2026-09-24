@@ -80,12 +80,12 @@ final class BasicAuth
             //}
 
             // Improved: Direct SQL query to check privileges and limit SQL injection
-            $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ LIKE :key";
+            $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ = :key";
             //$sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
             $postgisObject = new Model(connection: $this->connection);
             $res = $postgisObject->prepare($sql);
             try {
-                $postgisObject->execute($res, array("key" => $layerName . ".%"));
+                $postgisObject->execute($res, array("key" => $layerName));
             } catch (PDOException $e) {
                 throw new ServiceException($e->getMessage());
             }
