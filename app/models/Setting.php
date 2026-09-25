@@ -353,6 +353,8 @@ class Setting extends Model
     {
         $cacheType = "settings";
         $user = Model::toAscii(str:$_SESSION['screen_name'] ?? '', skipEmail: false);
+        $user = preg_replace('/[^a-zA-Z0-9_]/', '', $user); // Clean the user from illegal characters, like @
+        
         $cacheId = $this->postgisdb . "_" . $cacheType . "_" . $user; // Cache per user because personal API key is stored
         $CachedString = Cache::getItem($cacheId);
         if ($CachedString != null && $CachedString->isHit()) {

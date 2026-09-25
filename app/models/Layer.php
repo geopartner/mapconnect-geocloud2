@@ -176,7 +176,12 @@ class Layer extends Table
         }
 
         $cacheType = "meta";
-        $cacheId = $this->postgisdb . "_" . Session::getUser() . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
+        $user = Session::getUser();
+        $user = preg_replace('/[^a-zA-Z0-9_]/', '', $user); // Clean the user from illegal characters, like @
+        
+        $cacheId = $this->postgisdb . "_" . $user . "_" . $cacheType . "_" . md5($query . "_" . "(int)$auth" . "_" . (int)$includeExtent . "_" . (int)$parse . "_" . (int)$es) . "_" . ($restriction ? 'restriction' : 'notRestriction');
+
+        // Clean the cacheId from illegal characters, like @
 
         $CachedString = Cache::getItem($cacheId);
 
