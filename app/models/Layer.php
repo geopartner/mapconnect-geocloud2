@@ -729,6 +729,16 @@ class Layer extends Table
                 $arr[] = $key;
             }
         }
+
+        // Filter out keys that contain "@", since they are from Keycloak and not relevant for local privileges
+        $filtered = [];
+        foreach ($arr as $subuser) {
+            if (!str_contains($subuser, '@')) {
+                $filtered[] = $subuser;
+            }
+        }
+        $arr = $filtered;
+
         foreach ($arr as $subuser) {
             $privileges->$subuser = $privileges->$subuser ?? "none";
             if ($subuser != $this->schema) {
