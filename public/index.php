@@ -145,6 +145,19 @@ App::$param['protocol'] = App::$param['protocol'] ?? Util::protocol();
 App::$param['host'] = App::$param['host'] ?? App::$param['protocol'] . "://" . $_SERVER['SERVER_NAME'] . ($_SERVER['SERVER_PORT'] != "80" && $_SERVER['SERVER_PORT'] != "443" ? ":" . $_SERVER["SERVER_PORT"] : "");
 App::$param['userHostName'] = App::$param['userHostName'] ?? App::$param['host'];
 
+// Crude function for getting the db from a path part
+function getDbFromPathPart(string $pathpart): string
+{
+    // If the string can be exploded by '@', the last part is assumed to be the database name.
+    $dbSplit = explode("@", $pathpart);
+    if (count($dbSplit) == 1) {
+        return $dbSplit[0];
+    } else {
+        return $dbSplit[count($dbSplit) - 1];
+    }
+}
+
+
 // Handle OWS outside handler function
 try {
     if (Input::getPath()->part(1) == "wfs") {
@@ -153,10 +166,9 @@ try {
             Session::start();
         }
         // Support of legacy user@database notation in URI. The user part (before @) will be completely ignored
-        $dbSplit = explode("@", Input::getPath()->part(2));
+        $db = getDbFromPathPart(Input::getPath()->part(2));
         // User is either from basic auth, session or URI. The latter is same as database
-        $user = Input::getAuthUser() ?? Session::getUser() ?? $dbSplit[1] ?? $dbSplit[0];
-        $db = $dbSplit[1] ?? $dbSplit[0];
+        $user = Input::getAuthUser() ?? Session::getUser() ?? $db;
         // parentUser is superuser
         $parentUser = $user == $db;
         Database::setDb($db);
@@ -168,8 +180,8 @@ try {
         if (!empty(Input::getCookies()["PHPSESSID"])) { // Do not start session if no cookie is set
             Session::start();
         }
-        $dbSplit = explode("@", Input::getPath()->part(2));
-        Database::setDb($dbSplit[1] ?? $dbSplit[0]);
+        $db = getDbFromPathPart(Input::getPath()->part(2));
+        Database::setDb($db);
         new Wms();
     }
 } catch (OwsException|ServiceException $exception) {
@@ -248,11 +260,7 @@ $handler = static function () use ($routes) {
                 if (empty(Input::get("key"))) {
                     Session::start();
                 }
-                $db = Input::getPath()->part(4);
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = getDbFromPathPart(Input::getPath()->part(4));
                 Database::setDb($db);
             });
             Route::add("api/v1/elasticsearch/{action}/{user}/[indices]/[type]", function () {
@@ -277,11 +285,7 @@ $handler = static function () use ($routes) {
                     Session::start();
                 }
                 $r = func_get_arg(0);
-                $db = $r["user"];
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = getDbFromPathPart($r["user"]);
                 Database::setDb($db);
             });
             Route::add("api/v2/elasticsearch/{action}/{user}/{schema}/[rel]/[id]", function () {
@@ -291,27 +295,15 @@ $handler = static function () use ($routes) {
                 Database::setDb(Route::getParam("user"));
             });
             Route::add("api/v2/feature/{user}/{layer}/{srid}/[key]", function () {
-                $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = getDbFromPathPart(Route::getParam("user"));
                 Database::setDb($db);
             });
             Route::add("api/v2/keyvalue/{user}/[key]", function () {
-                $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = getDbFromPathPart(Route::getParam("user"));
                 Database::setDb($db);
             });
             Route::add("api/v2/preparedstatement/{user}", function () {
-                $db = Route::getParam("user");
-                $dbSplit = explode("@", $db);
-                if (sizeof($dbSplit) == 2) {
-                    $db = $dbSplit[1];
-                }
+                $db = getDbFromPathPart(Route::getParam("user"));
                 Database::setDb($db);
             });
             Route::add("api/v2/qgis/{action}/{user}", function () {
