@@ -530,6 +530,16 @@ SQL;
         // The listing branch of runsFor() and the retention delete both order
         // by started_at within one database.
         $sqls[] = "CREATE INDEX IF NOT EXISTS started_jobs_db_started_idx ON started_jobs (db, started_at DESC)";
+        
+        
+        
+        
+        // Geopartner additions / toggles
+
+        // Disable history-triggers
+        $sqls[] = "ALTER TABLE settings.geometry_columns_join DISABLE TRIGGER geometry_columns_join_history_tr";
+        $sqls[] = "ALTER TABLE settings.key_value DISABLE TRIGGER key_value_history_tr";
+          
         return $sqls;
     }
 }
