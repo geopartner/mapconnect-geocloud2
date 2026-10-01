@@ -111,6 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     // once the database is created, we need to insert a user to the public.users table in mapcentia database.
                     $db = new Database(new \app\inc\Connection(database: 'mapcentia'));
+                    $generatedPassword = (new Util())->generateStrongPassword();
                     $sql = "INSERT INTO public.users (
                             screenname,
                             pw,
@@ -121,7 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         )
                         VALUES (
                             '" . $dbName . "',
-                            'none',
+                            '" . $generatedPassword . "',
                             'none',
                             now(),
                             null,
