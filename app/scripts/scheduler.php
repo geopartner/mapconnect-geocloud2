@@ -10,6 +10,7 @@ include_once(__DIR__ . "/../conf/App.php");
 include_once(__DIR__ . "/../vendor/autoload.php");
 
 use app\conf\App;
+use app\inc\SchedulerLock;
 use app\models\Database;
 use app\inc\Model;
 use GO\Scheduler;
@@ -17,8 +18,20 @@ use Cron\CronExpression;
 
 new App();
 Database::setDb("gc2scheduler");
+
+// Mark runs whose process died without bookkeeping as lost (their advisory
+// lock is gone), so the API and the UI never show phantom running jobs.
+try {
+    $lost = new SchedulerLock()->reap();
+    if ($lost > 0) {
+        echo "Marked $lost lost run(s)\n";
+    }
+} catch (Throwable $e) {
+    error_log("scheduler: reaper failed: " . $e->getMessage());
+}
+
 $scheduler = new Scheduler([
-    'tempDir' => '/var/www/geocloud2/app/tmp'
+    'tempDir' =>  App::$param['path'] . 'app/tmp'
 ]);
 
 $model = new Model();
@@ -41,7 +54,7 @@ while ($row = $model->fetchRow($res)) {
         ];
         // We run the job function through another script, so it runs async
         // If using $scheduler->call() jobs will run in sync
-        $cmd = "/var/www/geocloud2/app/scripts/scheduler_run_job.php";
+        $cmd = App::$param['path'] . "app/scripts/scheduler_run_job.php";
         $expression = "{$row["min"]} {$row["hour"]} {$row["dayofmonth"]} {$row["month"]} {$row["dayofweek"]}";
         try {
             $cron = new CronExpression($expression);
@@ -52,7 +65,7 @@ while ($row = $model->fetchRow($res)) {
         try {
             $scheduler->php(
                 $cmd,
-                "/usr/bin/php",
+                PHP_BINARY,
                 $args,
                 $row["id"] . "_" . $row["name"]
             )->at($expression)->output([

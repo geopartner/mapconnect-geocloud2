@@ -1,18 +1,16 @@
 <form hx-post="/signin">
-    <h1 class="h3 mb-3 fw-normal">Log på MapConnect</h1>
-
-    <p>Start med at angive brugernavn eller e-mail. Derefter tryk på pilen for at tjekke om det eksisterer. Herefter kan du taste dit password</p>
+    <h1 class="h3 mb-3 fw-normal">Please sign in</h1>
 
     <div class="input-group">
         <div class="form-floating">
             <input class="form-control upper" type="text" name="user" id="user" value="{{ user }}"
-                   placeholder="Brugernavn eller e-mail" required
+                   placeholder="Username or e-mail" required
                     {% if databases|length == 0 %} autofocus {% endif %}/>
-            <label class="form-label" for="user">Brugernavn eller e-mail</label>
+            <label class="form-label" for="user">Username or e-mail</label>
         </div>
         <button style="border-color: #dee2e6; margin-bottom: -1px; border-bottom-right-radius: 0;"
                 class="btn btn-outline-secondary" type="submit"><i style="color: #dee2e6"
-        class="bi bi-arrow-right-circle"></i></button>
+                                                                   class="bi bi-arrow-right-circle"></i></button>
     </div>
 
     {% if parentdb %}
@@ -50,7 +48,7 @@
             </div>
         {% endif %}
 
-        <button class="btn btn-primary w-100 py-2 mt-3" type="submit">Log ind</button>
+        <button class="btn btn-primary w-100 py-2 mt-3" type="submit">Sign in</button>
     {% else %}
 
         <div class="form-floating">
@@ -60,7 +58,7 @@
             <label class="form-label" for="password2">Password</label>
         </div>
         <button type="submit" style="display: none"></button>
-        <button disabled class="btn btn-primary w-100 py-2 mt-3" type="submit">Log ind</button>
+        <button disabled class="btn btn-primary w-100 py-2 mt-3" type="submit">Sign in</button>
     {% endif %}
 
     <input type="hidden" name="response_type" value="{{ response_type }}"/>
@@ -76,5 +74,11 @@
         <a class="btn btn-outline-primary w-100 py-2 mb-3 mt-3 d-flex justify-content-center align-items-center gap-1"
            href="/github/start?client_id={{ client_id|e }}{% if parentdb %}&parentdb={{ parentdb|url_encode }}{% endif %}{% if response_type %}&response_type={{ response_type|e }}{% endif %}{% if redirect_uri %}&redirect_uri={{ redirect_uri|url_encode }}{% endif %}{% if state %}&state={{ state|e }}{% endif %}{% if code_challenge %}&code_challenge={{ code_challenge|e }}{% endif %}{% if code_challenge_method %}&code_challenge_method={{ code_challenge_method|e }}{% endif %}{% if action %}&action={{ action|e }}{% endif %}"><i
                     class="bi bi-github"></i> Continue with GitHub</a>
+        <a class="btn btn-outline-primary w-100 py-2 mb-3 d-flex justify-content-center align-items-center gap-1"
+           href="/gitlab/start?client_id={{ client_id|e }}{% if parentdb %}&parentdb={{ parentdb|url_encode }}{% endif %}{% if response_type %}&response_type={{ response_type|e }}{% endif %}{% if redirect_uri %}&redirect_uri={{ redirect_uri|url_encode }}{% endif %}{% if state %}&state={{ state|e }}{% endif %}{% if code_challenge %}&code_challenge={{ code_challenge|e }}{% endif %}{% if code_challenge_method %}&code_challenge_method={{ code_challenge_method|e }}{% endif %}{% if action %}&action={{ action|e }}{% endif %}"><i
+                    class="bi bi-gitlab"></i> Continue with GitLab</a>
+        <a class="btn btn-outline-primary w-100 py-2 mb-3 d-flex justify-content-center align-items-center gap-1"
+           href="/google/start?client_id={{ client_id|e }}{% if parentdb %}&parentdb={{ parentdb|url_encode }}{% endif %}{% if response_type %}&response_type={{ response_type|e }}{% endif %}{% if redirect_uri %}&redirect_uri={{ redirect_uri|url_encode }}{% endif %}{% if state %}&state={{ state|e }}{% endif %}{% if code_challenge %}&code_challenge={{ code_challenge|e }}{% endif %}{% if code_challenge_method %}&code_challenge_method={{ code_challenge_method|e }}{% endif %}{% if action %}&action={{ action|e }}{% endif %}"><i
+                    class="bi bi-google"></i> Continue with Google</a>
     </div>
 {% endif %}

@@ -21,6 +21,7 @@ use PDOException;
 use Postmark\PostmarkClient;
 use app\exceptions\GC2Exception;
 use Psr\Cache\InvalidArgumentException;
+use Throwable;
 
 /**
  * Class User
@@ -158,6 +159,8 @@ class User extends Model
         if (!empty($row['private_properties'])) {
             $row['private_properties'] = json_decode($row['private_properties']);
         }
+        // usergroup is JSONB; present it as a decoded list (or null), not a raw JSON string
+        $row['usergroup'] = self::toGroupArray($row['usergroup']);
         $response['success'] = true;
         $response['data'] = $row;
         return $response;
@@ -184,7 +187,8 @@ class User extends Model
         $name = Util::format($data['name']);
         $email = Util::format($data['email']);
         $password = Util::format($data['password']);
-        $group = (empty($data['usergroup']) ? null : Util::format($data['usergroup']));
+        $groupArr = self::toGroupArray($data['usergroup'] ?? null);
+        $group = $groupArr === null ? null : json_encode($groupArr, JSON_UNESCAPED_UNICODE);
         $zone = (empty($data['zone']) ? null : Util::format($data['zone']));
         $parentDb = (empty($data['parentdb']) ? null : Util::format($data['parentdb']));
         $properties = (empty($data['properties']) ? null : $data['properties']);
@@ -307,6 +311,7 @@ class User extends Model
             $client->sendEmailBatch($messages);
         }
         $row["properties"] = !empty($row["properties"]) ? json_decode($row["properties"]) : null;
+        $row['usergroup'] = self::toGroupArray($row['usergroup'] ?? null);
         $response['success'] = true;
         $response['message'] = 'User was created';
         $response['data'] = $row;
@@ -367,13 +372,11 @@ class User extends Model
         if ($hasPrivateProperties) $sQuery .= ", private_properties=:sPrivateProperties";
         $sQuery .= ", default_user=:sDefault";
         if (array_key_exists('usergroup', $data)) {
-            $userGroup = $data["usergroup"];
-            if (is_null($userGroup)) {
-                $userGroups[$user] = null;
-            } else {
-                $userGroups = Session::getByKey("usergroups") ?? [];
-                $userGroups[$user] = !empty($userGroup) ? $userGroup : null;
-            }
+            // Accept a JSON array, a JSON-array string (back-compat) or null; store as JSONB.
+            $groupArr = self::toGroupArray($data["usergroup"]);
+            $userGroup = $groupArr === null ? null : json_encode($groupArr, JSON_UNESCAPED_UNICODE);
+            $userGroups = Session::getByKey("usergroups") ?? [];
+            $userGroups[$user] = $userGroup; // JSON string or null (session cache, legacy shape)
             $sQuery .= ", usergroup=:sUsergroup";
             Session::set("usergroups", $userGroups);
         }
@@ -390,8 +393,7 @@ class User extends Model
             $res->bindParam(":sEmail", $email);
         }
         if (array_key_exists('usergroup', $data)) {
-            $str = $userGroup !== "" ? $userGroup : null;
-            $res->bindParam(":sUsergroup", $str);
+            $res->bindParam(":sUsergroup", $userGroup);
         }
         if ($hasProperties) {
             $res->bindParam(":sProperties", $properties);
@@ -409,6 +411,7 @@ class User extends Model
         $this->execute($res);
         $row = $this->fetchRow($res);
         $row["properties"] = !empty($row["properties"]) ? json_decode($row["properties"]) : null;
+        $row['usergroup'] = self::toGroupArray($row['usergroup'] ?? null);
         $response['success'] = true;
         $response['message'] = "User was updated";
         $response['data'] = $row;
@@ -463,6 +466,11 @@ class User extends Model
         $res = $this->prepare($sQuery);
         $this->execute($res, [":sUserID" => $userId]);
         $subusers = $res->fetchAll(PDO::FETCH_ASSOC);
+        // usergroup is JSONB; present it as a decoded list (or null), not a raw JSON string
+        foreach ($subusers as &$subuser) {
+            $subuser['usergroup'] = self::toGroupArray($subuser['usergroup']);
+        }
+        unset($subuser);
         $response = [];
         $response['success'] = true;
         $response['data'] = $subusers;
@@ -512,10 +520,10 @@ class User extends Model
         $this->execute($res, [":code" => $code]);
     }
 
-    public function cacheCode(string $key, mixed $value): void
+    public function cacheCode(string $key, mixed $value, int $ttl = 3600): void
     {
         $CachedString = Cache::getItem($key);
-        $CachedString->set($value)->expiresAfter(3600);
+        $CachedString->set($value)->expiresAfter($ttl);
         Cache::save($CachedString);
     }
 
@@ -559,5 +567,129 @@ class User extends Model
             Cache::save($CachedString);
             return $defaultUser;
         }
+    }
+
+    /**
+     * Returns the full inheritance closure for a set of users.
+     *
+     * Users and groups are the same entity (like PostgreSQL roles): a user's
+     * `usergroup` column is a JSONB array holding the screen names of the
+     * groups/users it belongs to. Given a list of starting users, this walks
+     * the membership graph upward and returns a flat, de-duplicated list
+     * containing the starting users together with every group/user reachable
+     * through `usergroup`, and so on downwards. The graph may be a DAG (a user
+     * can belong to several groups, and groups can share parents); cycles are
+     * handled safely so traversal always terminates.
+     *
+     * @param array $users Starting users — screen name strings or user rows (with a "screenname"/"userid" key).
+     * @return array<int, string> Flat, de-duplicated list of screen names in breadth-first order.
+     * @throws Throwable
+     * @TODO Cacheing
+     */
+    /**
+     * Normalizes a user_group value to a list of non-empty group-name strings, or null.
+     * Accepts an array, a JSON-array string (back-compat), or a plain string (treated as a
+     * single group name); null / empty / whitespace collapses to null (clears membership).
+     *
+     * @return array<int, string>|null
+     */
+    public static function toGroupArray(mixed $value): ?array
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return null;
+            }
+            $decoded = json_decode($trimmed, true);
+            $value = is_array($decoded) ? $decoded : [$trimmed];
+        }
+        if (!is_array($value)) {
+            return null;
+        }
+        $groups = array_values(array_filter(
+            array_map(fn($g) => is_string($g) ? trim($g) : null, $value),
+            fn($g) => $g !== null && $g !== ''
+        ));
+        return $groups === [] ? null : $groups;
+    }
+
+    public function getFullInheritance(?array $users, string $parentDb): array
+    {
+        if ($users === null) {
+            return [];
+        }
+        $queue = [];
+        foreach ($users as $user) {
+            $name = $this->resolveScreenName($user);
+            if ($name !== null) {
+                $queue[] = $name;
+            }
+        }
+
+        $result = [];
+        $seen = [];
+        while ($queue) {
+            $name = array_shift($queue);
+            if (isset($seen[$name])) {
+                // Already expanded — skip to avoid looping on cycles/diamonds.
+                continue;
+            }
+            $seen[$name] = true;
+            $result[] = $name;
+            foreach ($this->getUserGroups($name, $parentDb) as $group) {
+                if (!isset($seen[$group])) {
+                    $queue[] = $group;
+                }
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Extracts a screen name from either a plain string or a user row.
+     */
+    private function resolveScreenName(mixed $user): ?string
+    {
+        if (is_array($user)) {
+            $name = $user['screenname'] ?? $user['userid'] ?? null;
+        } else {
+            $name = $user;
+        }
+        if (!is_string($name)) {
+            return null;
+        }
+        $name = trim($name);
+        return $name === '' ? null : $name;
+    }
+
+    /**
+     * Returns the groups/users a single user directly belongs to,
+     * i.e. the decoded `usergroup` JSONB array. Returns an empty array when the
+     * user has no groups or does not exist as a row.
+     *
+     * @return array<int, string>
+     * @throws Throwable
+     */
+    protected function getUserGroups(string $screenName, string $parentDb): array
+    {
+        // Scope by parentdb: screen names are only unique within a database, so the same
+        // name can exist in several parent databases. Without this scope fetchRow() may
+        // return a same-named user from another database and the inheritance chain breaks.
+        $query = "SELECT usergroup FROM users WHERE screenname = :screenName AND parentdb = :parentDb";
+        $res = $this->prepare($query);
+        $this->execute($res, [":screenName" => $screenName, ":parentDb" => $parentDb]);
+        $row = $this->fetchRow($res);
+        if (empty($row['usergroup'])) {
+            return [];
+        }
+        // usergroup is JSONB; PDO returns it as a string, but tolerate a pre-decoded array too.
+        $groups = is_array($row['usergroup']) ? $row['usergroup'] : json_decode($row['usergroup'], true);
+        if (!is_array($groups)) {
+            return [];
+        }
+        return array_values(array_filter(
+            array_map(fn($g) => is_string($g) ? trim($g) : null, $groups),
+            fn($g) => $g !== null && $g !== ''
+        ));
     }
 }

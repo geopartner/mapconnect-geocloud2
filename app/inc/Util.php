@@ -202,6 +202,70 @@ class Util
     /**
      * @return float
      */
+    /**
+     * What kind of archive a downloaded file is, by its own first bytes: 'zip',
+     * 'gz', or null for anything that is not an archive.
+     *
+     * The bytes, not the URL's extension: a job URL can be a query
+     * (…/api/v2/sql/fkg?format=ogr/flatgeobuf&q=select…) that ends in no
+     * extension at all, while the response is very much a zip.
+     */
+    public static function archiveKind(string $path): ?string
+    {
+        if (!is_file($path)) {
+            return null;
+        }
+        $fh = @fopen($path, 'rb');
+        if ($fh === false) {
+            return null;
+        }
+        $magic = (string)fread($fh, 4);
+        fclose($fh);
+        // "PK\x03\x04" holds an entry, "PK\x05\x06" is the empty archive and
+        // "PK\x07\x08" a spanned one; all three are zips to ZipArchive.
+        if (str_starts_with($magic, "PK\x03\x04") || str_starts_with($magic, "PK\x05\x06") || str_starts_with($magic, "PK\x07\x08")) {
+            return 'zip';
+        }
+        if (str_starts_with($magic, "\x1f\x8b")) {
+            return 'gz';
+        }
+        return null;
+    }
+
+    /**
+     * Whether a response's headers describe a zip, i.e. whether the scheduler
+     * should unpack the download rather than hand it to ogr2ogr as it is.
+     *
+     * Servers spell the type in more ways than one: with parameters, in any
+     * case, and sometimes as a list — GC2's own SQL API answers
+     * "application/zip, application/octet-stream" for a format=ogr/… query — so
+     * an exact match on one spelling misses real zips. A server that only says
+     * application/octet-stream is caught by the Content-Disposition filename.
+     * Nothing else is consulted: a .zip named in some other header says nothing
+     * about the body.
+     *
+     * @param list<string> $headers raw "Name: value" lines, as get_headers() returns them
+     */
+    public static function headersSayZip(array $headers): bool
+    {
+        foreach ($headers as $header) {
+            $parts = explode(':', (string)$header, 2);
+            if (count($parts) !== 2) {
+                continue;
+            }
+            $name = strtolower(trim($parts[0]));
+            $value = strtolower($parts[1]);
+            if ($name === 'content-type'
+                && (str_contains($value, 'application/zip') || str_contains($value, 'application/x-zip'))) {
+                return true;
+            }
+            if ($name === 'content-disposition' && preg_match('/filename\s*=\s*"?[^"]*\.zip"?/', $value) === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static function microtime_float(): float
     {
         list($usec, $sec) = explode(" ", microtime());
@@ -236,11 +300,16 @@ class Util
     }
 
     /**
-     * @return string  Base URL + path prefix (strips "index.php" and deduplicates slashes)
+     * @return string  Base URL + path prefix (strips the query string, "index.php" and deduplicates slashes)
      */
     public static function thePath(): string
     {
-        $uri = str_replace('index.php', '', $_SERVER['REDIRECT_URL'] ?? $_SERVER['REQUEST_URI'] ?? '');
+        $uri = $_SERVER['REDIRECT_URL'] ?? $_SERVER['REQUEST_URI'] ?? '';
+        // Drop any query string. On Apache mod_rewrite REDIRECT_URL is already path-only, but on
+        // FrankenPHP/Caddy only REQUEST_URI is set and it carries "?SERVICE=WFS&REQUEST=..." — that
+        // raw "&" would land unescaped in the WFS Capabilities xlink:href values and break the XML.
+        $uri = explode('?', $uri, 2)[0];
+        $uri = str_replace('index.php', '', $uri);
         $uri = str_replace('//', '/', $uri);
         return self::host() . $uri;
     }
@@ -522,17 +591,17 @@ class Util
         ];
     }
 
-    /**
-     * Extract database name from a string that may have prefix(es) before @ symbols.
-     * Takes the part after the last @ symbol, or returns the original string if no @ is found.
-     *
-     * @param string $input The input string (e.g., "user@domain@database" or "database")
-     * @return string The database name (part after the last @)
-     */
-    public static function extractDatabaseName(string $input): string
+    public static function encodeUrl(string $url): string
     {
-        $parts = explode("@", $input);
-        $databaseName = $parts[count($parts) - 1];
-        return $databaseName;
+        return preg_replace_callback(
+            '/%(?:[0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~:\/?#\[\]@!$&\'()*+,;=%]/u',
+            function ($match) {
+                if ($match[0][0] === '%') {
+                    return $match[0];
+                }
+                return rawurlencode($match[0]);
+            },
+            $url
+        );
     }
 }

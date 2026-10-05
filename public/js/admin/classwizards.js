@@ -288,7 +288,7 @@ classWizards.init = function (record) {
                                             incrementValue: 1,
                                             accelerate: true,
                                             allowBlank: true,
-                                            value: (customIsSet && c) ? classWizards.setting.opacity : ""
+                                            value: (customIsSet && c) ? (classWizards.setting.opacity || classWizards.setting.style_opacity) : ""
                                         }),
                                         new Ext.form.ComboBox({
                                             store: ['', 'bbox', 'centroid', 'end', 'labelpnt', 'labelpoly', 'start', 'vertices'],
@@ -363,36 +363,36 @@ classWizards.init = function (record) {
                                             store: wmsLayer.numFieldsForStore,
                                             editable: true,
                                             triggerAction: "all",
-                                            name: "style_offsetx",
+                                            name: "offsetx",
                                             allowBlank: true,
-                                            value: (customIsSet && c) ? classWizards.setting.style_offsetx : ""
+                                            value: (customIsSet && c) ? (classWizards.setting.offsetx || classWizards.setting.style_offsetx) : ""
                                         },
                                         {
                                             xtype: "combo",
                                             store: wmsLayer.numFieldsForStore,
                                             editable: true,
                                             triggerAction: "all",
-                                            name: "style_offsety",
+                                            name: "offsety",
                                             allowBlank: true,
-                                            value: (customIsSet && c) ? classWizards.setting.style_offsety : ""
+                                            value: (customIsSet && c) ? (classWizards.setting.offsety || classWizards.setting.style_offsety) : ""
                                         },
                                         {
                                             xtype: "combo",
                                             store: wmsLayer.numFieldsForStore,
                                             editable: true,
                                             triggerAction: "all",
-                                            name: "style_polaroffsetr",
+                                            name: "polaroffsetr",
                                             allowBlank: true,
-                                            value: (customIsSet && c) ? classWizards.setting.style_polaroffsetr : ""
+                                            value: (customIsSet && c) ? (classWizards.setting.polaroffsetr || classWizards.setting.style_polaroffsetr) : ""
                                         },
                                         {
                                             xtype: "combo",
                                             store: wmsLayer.numFieldsForStore,
                                             editable: true,
                                             triggerAction: "all",
-                                            name: "style_polaroffsetd",
+                                            name: "polaroffsetd",
                                             allowBlank: true,
-                                            value: (customIsSet && c) ? classWizards.setting.style_polaroffsetd : ""
+                                            value: (customIsSet && c) ? (classWizards.setting.polaroffsetd || classWizards.setting.style_polaroffsetd) : ""
                                         },
                                     ]
                                 },
@@ -1702,8 +1702,6 @@ classWizards.clearAfterUpdate = function () {
     Ext.getCmp("a3").removeAll();
     Ext.getCmp("a8").removeAll();
     Ext.getCmp("a9").removeAll();
-    Ext.getCmp("a10").removeAll();
-    Ext.getCmp("a11").removeAll();
     wmsClasses.grid.getSelectionModel().clearSelections();
     Ext.getCmp("classTabs").disable();
 }

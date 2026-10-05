@@ -5,7 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
-## [2026.6.4] - 2026-18-6
+## [2026.10.0]
+### Added
+- **Tile seeding is a queue.** `POST /api/v4/tileseeder/jobs` writes a row and answers `202`; a cron tick claims pending jobs under a node-wide cap and spawns one process per job. Status, the log tail and cancellation live in the row, so they work from any node — the v3 endpoint read `pgrep` and sent `kill -9` on whichever node happened to serve the request. `GET …/jobs[/{uuid}]` lists or reads one (with its log), `DELETE …/jobs/{uuid}` answers `204` when the job was still queued and `202` when a worker has to act. Jobs run `pending → running → succeeded | failed | cancelled`, with a computed `stale` when a run stops heartbeating. New `tileseeder` block in `App.php` (`maxConcurrent`, `maxThreads`, `maxPending`, `maxHours`, `cancelGraceSeconds`, `logTailBytes`, `keepLogHours`, and `seedBinary` to point at a non-standard `mapcache_seed`) and a once-a-minute cron entry.
+- **Per-schema tile settings.** `GET|PATCH|DELETE /api/v4/schemas/{schema}/tile` configures the merged `<schema>` and `<schema>.mvt` tilesets — the ones drawn from every layer in a schema at once — with the same settings a single layer already had: `cache`, `format`, `ttl`, `auto_expire`, `meta_size`, `meta_buffer`, `s3_tile_set`, `title` and `abstract`. Every value was previously a literal in the config generator. `GET` answers the effective settings merged over the fallbacks, with `_stored` carrying only what is set and `_defaults` what each would be if it were not, so a form can show a default beside a value the user is about to clear. The settings deliberately survive dropping the schema, since dropping and recreating one is routine; `PATCH` still requires the schema to exist, so a typo cannot leave a row that takes effect months later.
+- Clearing a merged per-schema tileset: `DELETE /api/v4/mapcache/database/{database}/tileset/{schema}` now accepts a bare schema name (and `{schema}.mvt`). Reserved for the database super user, because no single layer's privileges govern a tileset drawn from them all. A full wipe is synchronous for `sqlite` and backgrounded for `disk`; `s3` and `memcache` answer `400` and need a scoped delete (`?bbox=`/`?zoom=`), which is also now available for schema tilesets.
+- `GET /api/v4/meta-config` serves the merged `metaConfig` — the `App.php` custom fieldsets over the built-in ones, de-duplicated by `fieldsetName` with custom winning — so a client no longer has to hardcode the relation-properties form.
+- `GET /api/v4/schemas/{schema}/tables` reports `_geometry_columns` (name, type and SRID per geometry column) and `_columns` (the column names in order) per relation, in both the full and the `namesOnly=true` listing, from one catalog query per schema.
+- A scheduler job can turn off the automatic WFS 2.0.0 `sortBy` — the job field `use_sortby`, passed to `get.php` as `--useSortBy` — for the services that advertise 2.0.0 and then reject the parameter. Absent means on, as before.
+- `get.php` takes a configurable memory limit (`memoryLimit` in `App.php`, default `128M`).
+
+### Changed
+- **The v3 tileseeder is a shell over the v4 queue.** All four endpoints keep their shapes and status codes, so existing callers are unaffected, but no v3 code shells out any more: `exec`, `pgrep` and `kill -9` are gone. Two deliberate differences: the `cmd` field is removed from the POST response, because it carried the Postgres password, and `pid` is always `null`, since a worker rather than the request starts the seed.
+- **The merged per-schema source orders its layers by `sort_id`, lowest at the bottom.** The query behind it had no `ORDER BY` and `settings.getColumns()` selects `sort_id` without sorting by it, so the draw order of a merged tileset was whatever Postgres returned and could differ between two runs of the config generator. **Upgrade note:** the generated MapCache configuration changes for every install, and a merged tileset whose stacking happened to look right by accident may now look different — it will, however, match the `sort_id` the layers are configured with.
+- Map file updates use PHP string operations instead of shelling out to `sed`.
+- Finished scheduler runs are pruned after 4 hours instead of 24.
+- `settings.geometry_columns_join.f_table_abstract` is widened to `text`, on the history table as well, so a long abstract is no longer truncated.
+
+### Fixed
+- A merged per-schema tileset could not be fetched through the authorizing proxy at all: a tileset name without a dot was discarded before authorization, so every tile answered `403 Could not resolve tileset for authorization` over TMS, WMTS and gmaps alike. It now resolves and is authorized against every layer in the schema — the rule the WMS path already applied to a request naming several layers — so it inherits the strictest layer's requirement. `GetCapabilities` was never affected, being no tile fetch.
+- A row left in `settings.geometry_columns_join` after its table was dropped no longer decides authorization. The config generator never saw those rows, so they could both put layers in a merged tileset's authorization list that the tileset does not draw, and let a stale name pass the check that makes an unresolvable tileset fail closed. The list now comes from `settings.getColumns()`, like the generator's, cached for the proxy's existing authorization window and busted when a layer or table changes.
+- Clearing a schema's tile cache looked in the wrong backend: `DELETE /controllers/tilecache/schema/{schema}` resolved it by looking the literal word `schema` up as a layer, so it could only ever find the install default, and a backend with no delete path returned an empty response. It now resolves the schema, and answers `501` with a message where a full delete is not supported.
+- `get.php` no longer aborts a job's cleanup when the source returns no features, so a run that legitimately fetched nothing ends as `succeeded` instead of terminating with `columns not found`.
+- `get.php` recognises a zip by what the response and the file actually are, not by an exact header match and a filename extension, so an archive from GC2's own SQL API is unpacked instead of being stored whole; `fgb` is recognised as a vector extension.
+- The SQL API compares the `ogr/…` format case-insensitively and creates its export directory on demand, so `format=ogr/FlatGeobuf` no longer answers a zip-less file or fails on a missing directory.
+- A snapshot's STAC collection description reads the key `relationMeta()` actually returns, so the layer abstract reaches the catalog.
+- Style symbol URLs are encoded (`Util::encodeUrl`).
+
+## [2026.9.1]
+### Added
+- Cache Basic-auth allow decisions on the legacy /ows and /wms endpoints
+
+### Fixed
+- Handle null privileges in extractHighestPrivilege function.
+
+## [2026.9.0]
+### Added
+- **Parquet snapshots.** `POST /api/v4/snapshots` queues an export of a table or view to (Geo)Parquet and, optionally, FlatGeobuf; a cron worker writes the files to S3 or local storage and publishes them in a per-database, per-relation, per-date layout. `GET /api/v4/snapshots` reports status. Formats are chosen per request (`formats`) with a server default in `App.php`; formats a relation cannot produce are skipped with a reason.
+- Fast listings for clients: `GET /api/v4/schemas` returns the read-only `_table_count` (tables, views and materialized views) on every schema, also with `namesOnly=true`; `GET /api/v4/schemas/{schema}/tables?namesOnly=true` is now one catalog query for the whole schema (before it still built every table's full definition and merely omitted it) and returns `name`, `_type`, `_events`, `_column_count` and `_links` per table. The full listings are unchanged apart from the new `_column_count`.
+- Snapshot `latest`: `…/snapshots/latest[/data[/{format}]|/files/{name}]` is a fixed URL for the newest published snapshot of a relation (metadata adds `_links.latest`); the store gets a `latest.json` pointer and a STAC `latest-version` link per relation, with the Hive partition layout unchanged.
+- **Snapshot read API.** `GET /api/v4/schemas/{schema}/relations/{relation}/snapshots[/{date}[/data[/{format}]|/files/{name}]]` lists and serves published snapshots with HEAD, byte ranges and CORS, proxied or as presigned redirects, so DuckDB, pandas and browsers can read them directly. Sub-user privileges and geofence rules apply.
+- **STAC catalog.** Every publish rewrites a STAC 1.1.0 catalog (catalog, one collection per relation, one item per snapshot with an asset per format) in the snapshot store, with titles from the layer metadata.
+- **Scheduler v4 API.** `api/v4/scheduler/jobs` (CRUD) and `api/v4/scheduler/runs` (list, start, stop) with a run registry: status, host, heartbeat, stale flag, exit reason and the run's log. Jobs can queue a snapshot after import and choose its formats.
+- Scheduler cooldown: `gc2scheduler.minInterval` sets a minimum time between runs of the same job; manual starts bypass it.
+- `AGENTS.md` (imported by `CLAUDE.md`) with the repository's developer rules: API design, worker-safe controllers, background jobs, testing and process.
+- OGC API Features (Part 1 Core, Part 2 CRS) and OGC API Maps (Part 1 Core) under `api/v4/ogc/database/{database}`, served through the WFS engine and the OWS proxy with geofence, versioning and workflow enforced. Map backend errors answer as `502` JSON. Upgrade note: `f=jpeg` maps need the WMS mapfiles regenerated once.
+- v4 Keyvalue API `api/v4/keyvalue/{key}` with an owner/public access model and a `?paths` projection.
+- v4 Layers API `api/v4/layers/{layer}` with addressable classes, styles and labels, and an OpenAPI document that describes every settable layer, class, style and label property.
+- Worker-safe (FrankenPHP) v4 OWS and WFS endpoints (`api/v4/ows/…`, `api/v4/wfs/…`) with full parity to the legacy proxies, Bearer, Basic and anonymous access, and per-layer authorization.
+- Full group-privilege inheritance for layer authorization (nested groups, highest privilege wins, inherited ownership).
+- v4 MapCache: an authorizing tile proxy `api/v4/mapcache/database/{database}/…` and `DELETE …/tileset/{tileset}` to wipe cached tiles (scoped or full).
+- v4 Map API `api/v4/map/schema/{schema}` for the per-schema initial view in EPSG:4326.
+
+### Changed
+- New Docker image based on Trixie with a separate `cron` stage, so the `mapserver` stage can be built without cron.
+- **Scheduler locking rewritten on Postgres advisory locks.** Lock files are gone; one run per job, at most `gc2scheduler.maxJobs` concurrent runs, runs registered in `started_jobs` with heartbeats, a reaper for lost runs and a `timeout` wrapper. The lock session refuses to run behind a transaction-pooled PgBouncer. Old registry rows are repaired by the migration and finished runs are pruned after 30 days.
+- Scheduler WFS imports page by default (WFS 2.0.0 `startIndex`/`count` with an automatic `sortBy`); the `|` grid notation and WFS 1.x behave as before.
+- CLI scripts that loop over all databases release each database's connection (`Model::disconnect()`).
+- `Job::runJob` shell-escapes every value of the `get.php` command line and spawns it with the running php binary.
+- MapCache config is kept in sync by a PHP cron job with Apache configtest and rollback instead of the shell watcher, and the Layer API only regenerates it for caching-relevant changes.
+- v4 OWS and the legacy `/ows`/`/wms` endpoint cache Basic-authenticated per-layer allow decisions for 60 s (same cache entries for both); HTTP Basic auth checks the primary login password before the viewer password (`httpBasicViewerFallback`).
+- Dynamic symbols and labels: classes take any number of styles and labels; class JSON keys are unprefixed (legacy formats stay readable); fixed ids are assigned on save.
+- MapCache config generation refactored into a worker-safe model; front-end build migrated from Grunt to plain Node scripts; the dashboard toolchain runs on Node 24.
+- Meta fields fall back to ordering by `_value` when `_order` is empty.
+
+### Fixed
+- Scheduler: overwrite imports never got the GIST index on `the_geom` (the check ran against the final table before it was created); new and re-imported tables are indexed again.
+- Scheduler: due jobs did not start from cron when php lives in `/usr/local/bin`; curl failures now end the run as failed instead of overwriting the table; `Content-Type` sniffing has a timeout; the scheduler OpenAPI describes optional list forms, partial PATCH and job name normalisation.
+- v4 scope violations answer `403` instead of `500`.
+- Apache keeps the backend `Content-Length` on HEAD and 206 responses (`ap_trust_cgilike_cl`), and CORS allows `Range`/`If-Range` and exposes the range and caching headers.
+- WFS `GetCapabilities` produces valid XML under FrankenPHP/Caddy; the v4 router matches routes with omitted optional trailing segments.
+- Legacy GUI class saves keep fixed class ids; swapped min/max scale denominator tooltips corrected.
+- Docker dev image: Node 24 on the PATH for every shell; the unused `grunt-npm-install` dependency (and its vendored npm 3) removed.
+
+## [2026.6.6] - 2026-29-6
+### FIXED
+- Remove `encodeURIComponent` from the Image URL widget in GC2 Admin. Before this change, the widget incorrectly encoded the image URL.
+- Classes without names are skipped in the JSON legend API. They are already skipped in the HTML legend API.
+- In the SQL API, the mimetype of bytea fields is no longer resolved from reading the first chunks of the bytea. This could be very slow for compressed toasted tables. The resolution is now deferred until the decoding is actually performed in the decode API.
+
+## [2026.6.5] - 2026-23-6
+### Fixed
+- MapFile: Introduce `addSquareBracket` utility function to cleanly handle non-numeric values.
+  Wraps the provided value with square brackets if it is not numeric.
+  If the value already contains square brackets, they are trimmed first before reapplying them.
+
+## [2026.6.4] - 2026-23-6
 ### CHANGED
 - Update UUID defaults to use `uuid_generate_v4()` instead of `gen_random_uuid()` from the uuid-ossp extension.
   The latter is not available on all PostgreSQL versions.

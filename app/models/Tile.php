@@ -22,6 +22,33 @@ class Tile extends Model
 {
     public string $table;
 
+    public const DEF_KEYS = [
+        "theme_column",
+        "label_column",
+        "opacity",
+        "label_max_scale",
+        "label_min_scale",
+        "cluster",
+        "meta_tiles",
+        "meta_size",
+        "meta_buffer",
+        "ttl",
+        "auto_expire",
+        "maxscaledenom",
+        "minscaledenom",
+        "symbolscaledenom",
+        "geotype",
+        "offsite",
+        "format",
+        "lock",
+        "layers",
+        "bands",
+        "cache",
+        "s3_tile_set",
+        "label_no_clip",
+        "polyline_no_clip",
+    ];
+
     function __construct(string $table, ?Connection $connection = null)
     {
         parent::__construct(connection: $connection);
@@ -86,41 +113,16 @@ class Tile extends Model
     public function update(object $data): array
     {
         $this->clearCacheOnSchemaChanges();
-        $schema = [
-            "theme_column",
-            "label_column",
-            "opacity",
-            "label_max_scale",
-            "label_min_scale",
-            "cluster",
-            "meta_tiles",
-            "meta_size",
-            "meta_buffer",
-            "ttl",
-            "auto_expire",
-            "maxscaledenom",
-            "minscaledenom",
-            "symbolscaledenom",
-            "geotype",
-            "offsite",
-            "format",
-            "lock",
-            "layers",
-            "bands",
-            "cache",
-            "s3_tile_set",
-            "label_no_clip",
-            "polyline_no_clip",
-        ];
+        $schema = self::DEF_KEYS;
         $oldData = $this->get();
         $newData = [];
         foreach ($schema as $k) {
             $newData[$k] = (isset($data->$k) || (property_exists($data, $k) && $data->$k === null)) ? $data->$k : $oldData["data"][0][$k];
         }
         $newData = json_encode($newData);
-        $sql = "UPDATE settings.geometry_columns_join SET def='$newData' WHERE _key_=:layer";
+        $sql = "UPDATE settings.geometry_columns_join SET def=:def WHERE _key_=:layer";
         $res = $this->prepare($sql);
-        $this->execute($res, ['layer' => $this->table]);
+        $this->execute($res, ['def' => $newData, 'layer' => $this->table]);
         $response['success'] = true;
         $response['message'] = "Def updated";
         return $response;

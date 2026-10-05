@@ -123,11 +123,12 @@ final class Transaction implements HandlerInterface
                     throw new OwsException("You don't have a role in the workflow of '{$typeName}'");
                 }
 
-                // Per-layer HTTP basic authentication
-                if (!$this->ctx->trusted) {
+                // Per-layer HTTP basic authentication (token identities were
+                // already authorized per typeName in the controller)
+                if (!$this->ctx->trusted && !$this->ctx->tokenAuth) {
                     $auth = $model->getGeometryColumns("{$this->ctx->schema}.{$typeName}", 'authentication');
                     if ($auth === 'Write' || $auth === 'Read/write' || !empty(Input::getAuthUser())) {
-                        (new BasicAuth())->authenticate("{$this->ctx->schema}.{$typeName}", true);
+                        (new BasicAuth(connection: $this->ctx->connection))->authenticate("{$this->ctx->schema}.{$typeName}", true);
                     }
                 }
 
@@ -138,7 +139,7 @@ final class Transaction implements HandlerInterface
                 );
 
                 if ($model->getGeometryColumns("{$this->ctx->schema}.{$typeName}", 'editable')) {
-                    Tilecache::bust("{$this->ctx->schema}.{$typeName}");
+                    Tilecache::bust("{$this->ctx->schema}.{$typeName}", $this->ctx->connection);
                     $sql = $this->composeInsertSql($typeName, $fields, $values, $primary['attname'], $gc2WorkflowFlag, $tableObj, $layerModel);
                     $stmt = $model->prepare($sql);
                     $model->execute($stmt);
@@ -146,7 +147,7 @@ final class Transaction implements HandlerInterface
                     $newId = $row[$primary['attname']] ?? $row['gid'] ?? null;
 
                     // Geofence post-check (savepoint-safe inside outer transaction)
-                    $userFilter = new UserFilter($user, 'wfs', 'insert', '*', $this->ctx->schema, $typeName);
+                    $userFilter = new UserFilter($this->ctx->geofenceUser ?? $this->ctx->user, 'wfs', 'insert', '*', $this->ctx->schema, $typeName);
                     $geofence = new Geofence($userFilter, $this->ctx->connection);
                     $authResult = $geofence->authorize($rules);
                     if (($authResult['access'] ?? '') === Geofence::LIMIT_ACCESS) {
@@ -251,11 +252,12 @@ final class Transaction implements HandlerInterface
                 throw new OwsException("You don't have a role in the workflow of '{$typeName}'");
             }
 
-            // Per-layer HTTP basic authentication
-            if (!$this->ctx->trusted) {
+            // Per-layer HTTP basic authentication (token identities were
+            // already authorized per typeName in the controller)
+            if (!$this->ctx->trusted && !$this->ctx->tokenAuth) {
                 $auth = $model->getGeometryColumns("{$this->ctx->schema}.{$typeName}", 'authentication');
                 if ($auth === 'Write' || $auth === 'Read/write' || !empty(Input::getAuthUser())) {
-                    (new BasicAuth())->authenticate("{$this->ctx->schema}.{$typeName}", true);
+                    (new BasicAuth(connection: $this->ctx->connection))->authenticate("{$this->ctx->schema}.{$typeName}", true);
                 }
             }
 
@@ -263,7 +265,7 @@ final class Transaction implements HandlerInterface
                 continue; // skip non-editable, legacy silently records in $notEditable
             }
 
-            Tilecache::bust("{$this->ctx->schema}.{$typeName}");
+            Tilecache::bust("{$this->ctx->schema}.{$typeName}", $this->ctx->connection);
             $tableSrid = $model->getGeometryColumns("{$this->ctx->schema}.{$typeName}", 'srid');
             $originalFeature = null;
 
@@ -365,7 +367,7 @@ final class Transaction implements HandlerInterface
             }
 
             // Geofence sandbox via savepoint (worker-safe, savepoint nests inside outer tx)
-            $userFilter = new UserFilter($user, 'wfs', 'update', '*', $this->ctx->schema, $typeName);
+            $userFilter = new UserFilter($this->ctx->geofenceUser ?? $this->ctx->user, 'wfs', 'update', '*', $this->ctx->schema, $typeName);
             $geofence = new Geofence($userFilter, $this->ctx->connection);
             $authResult = $geofence->authorize($rules);
             if (($authResult['access'] ?? '') === Geofence::LIMIT_ACCESS) {
@@ -378,7 +380,7 @@ final class Transaction implements HandlerInterface
             }
 
             // Rules-rewrite (DENY etc.)
-            $walkerRule = new TableWalkerRule($user, 'wfst', 'update', '');
+            $walkerRule = new TableWalkerRule($this->ctx->geofenceUser ?? $this->ctx->user, 'wfst', 'update', '');
             $walkerRule->setRules($rules);
             $ast = $factory->createFromString($sql);
             try {
@@ -448,11 +450,12 @@ final class Transaction implements HandlerInterface
                 throw new OwsException("You don't have a role in the workflow of '{$typeName}'");
             }
 
-            // Per-layer HTTP basic authentication
-            if (!$this->ctx->trusted) {
+            // Per-layer HTTP basic authentication (token identities were
+            // already authorized per typeName in the controller)
+            if (!$this->ctx->trusted && !$this->ctx->tokenAuth) {
                 $auth = $model->getGeometryColumns("{$this->ctx->schema}.{$typeName}", 'authentication');
                 if ($auth === 'Write' || $auth === 'Read/write' || !empty(Input::getAuthUser())) {
-                    (new BasicAuth())->authenticate("{$this->ctx->schema}.{$typeName}", true);
+                    (new BasicAuth(connection: $this->ctx->connection))->authenticate("{$this->ctx->schema}.{$typeName}", true);
                 }
             }
 
@@ -460,7 +463,7 @@ final class Transaction implements HandlerInterface
                 continue; // skip non-editable
             }
 
-            Tilecache::bust("{$this->ctx->schema}.{$typeName}");
+            Tilecache::bust("{$this->ctx->schema}.{$typeName}", $this->ctx->connection);
             $where = WfsFilter::explode($hey['Filter'], null, null, $primary['attname']);
 
             if ($tableObj->versioning) {
@@ -512,7 +515,7 @@ final class Transaction implements HandlerInterface
             }
 
             // Geofence sandbox via savepoint
-            $userFilter = new UserFilter($user, 'wfs', 'delete', '*', $this->ctx->schema, $typeName);
+            $userFilter = new UserFilter($this->ctx->geofenceUser ?? $this->ctx->user, 'wfs', 'delete', '*', $this->ctx->schema, $typeName);
             $geofence = new Geofence($userFilter, $this->ctx->connection);
             $authResult = $geofence->authorize($rules);
             if (($authResult['access'] ?? '') === Geofence::LIMIT_ACCESS) {
@@ -525,7 +528,7 @@ final class Transaction implements HandlerInterface
             }
 
             // Rules-rewrite
-            $walkerRule = new TableWalkerRule($user, 'wfst', 'delete', '');
+            $walkerRule = new TableWalkerRule($this->ctx->geofenceUser ?? $this->ctx->user, 'wfst', 'delete', '');
             $walkerRule->setRules($rules);
             $ast = $factory->createFromString($sql);
             try {

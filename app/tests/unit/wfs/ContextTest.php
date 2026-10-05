@@ -16,11 +16,13 @@ class ContextTest extends Unit
             database: 'mydb',
             schema: 'public',
             user: 'alice',
+            userGroup: null,
             parentUser: false,
             trusted: true,
             host: 'http://example.com',
             thePath: 'http://example.com/wfs/mydb/public',
             startTime: 1700000000.0,
+
         );
         $this->assertSame($conn, $ctx->connection);
         $this->assertSame('mydb', $ctx->database);
@@ -36,8 +38,9 @@ class ContextTest extends Unit
         $ctx = new Context(
             connection: $conn,
             database: 'mydb', schema: 'public', user: 'alice',
-            parentUser: false, trusted: false,
-            host: '', thePath: '', startTime: 0.0,
+            userGroup: null, parentUser: false,
+            trusted: false, host: '',
+            thePath: '', startTime: 0.0,
         );
         $m = $ctx->model();
         $this->assertInstanceOf(Model::class, $m);
