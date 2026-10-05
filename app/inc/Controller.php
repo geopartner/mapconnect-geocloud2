@@ -219,10 +219,14 @@ class Controller
     public function ApiKeyAuthLayer(string $layer, bool $transaction, array $rels, ?string $subUser = null, ?string $inputApiKey = null): ?array
     {
         $response = new Setting(connection: $this->connection)->get();
+        $originalDatabase = $this->connection->database;
         if ($subUser) {
             $apiKey = $response['data']->api_key_subuser->$subUser;
             $group = !empty($response['data']->userGroups->$subUser) ? json_decode($response['data']->userGroups->$subUser) : null;
+            // BUG: the User() sets the database to mapcentia, but doesnt unset it - caused rest of the code to run in the wrong database
             $userGroupFullChain = $group ? new User(connection: $this->connection)->getFullInheritance($group, $this->connection->database) : null;
+            // Reset the database to the original one after fetching the full inheritance
+            $this->connection->database = $originalDatabase;
         } else {
             $apiKey = $response['data']->api_key;
         }
@@ -238,6 +242,7 @@ class Controller
         $isAuth = $isKeyCorrect || $check;
         $session = !empty($_SESSION["subuser"]) ? $_SESSION["screen_name"] . '@' . $_SESSION["parentdb"] : $_SESSION["screen_name"] ?? null;
         try {
+            // BUG: This check tries to run in mapcentia, which doesnt have the layer available - obviously..
             $response = new Authorization(connection: $this->connection)->check(relName: $layer, transaction: $transaction, isAuth: $isAuth, subUser: $subUser, userGroup: $userGroupFullChain ?? null, rels: $rels);
         } catch (GC2Exception $e) {
             // Denials are returned as a structured failure (not thrown) so the
