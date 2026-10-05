@@ -242,7 +242,6 @@ class Controller
         $isAuth = $isKeyCorrect || $check;
         $session = !empty($_SESSION["subuser"]) ? $_SESSION["screen_name"] . '@' . $_SESSION["parentdb"] : $_SESSION["screen_name"] ?? null;
         try {
-            // BUG: This check tries to run in mapcentia, which doesnt have the layer available - obviously..
             $response = new Authorization(connection: $this->connection)->check(relName: $layer, transaction: $transaction, isAuth: $isAuth, subUser: $subUser, userGroup: $userGroupFullChain ?? null, rels: $rels);
         } catch (GC2Exception $e) {
             // Denials are returned as a structured failure (not thrown) so the

@@ -61,13 +61,32 @@ class Authorization extends Model
 
         if ($auth === "Read/write" || $auth === "Write") {
             $rows = $this->getColumns($schema, $unQualifiedName);
+
+            $mergedPrivileges = [];
+
+            // BUG: Merge privileges from all rows for the given subuser and user group
+            foreach ($rows as $row) {
+                if (!empty($row["privileges"])) {
+                    $privileges = json_decode($row["privileges"], true);
+                    foreach ($privileges as $key => $value) {
+                        if (!isset($mergedPrivileges[$key])) {
+                            $mergedPrivileges[$key] = $value;
+                        } else {
+                            $mergedPrivileges[$key] = max($mergedPrivileges[$key], $value);
+                        }
+                    }
+                }
+            }
+
             foreach ($rows as $row) {
                 // Ensure we operate on the correct layer from the database
                 if ($row["f_table_schema"] != $schema || $row["f_table_name"] != $unQualifiedName) {
                     continue;
                 }
                 if ($subUser) {
-                    $privileges = !empty($row["privileges"]) ? json_decode($row["privileges"], true) : [];
+                    //$privileges = !empty($row["privileges"]) ? json_decode($row["privileges"], true) : [];
+                    $privileges = $mergedPrivileges;
+
                     $response = [
                         'auth_level' => $auth,
                         self::USED_RELS_KEY => $rels,
