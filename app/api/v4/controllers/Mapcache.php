@@ -13,6 +13,7 @@ use app\api\v4\Controller;
 use app\api\v4\Responses\StreamedResponse;
 use app\api\v4\Scope;
 use app\conf\App;
+use app\controllers\Mapcache as MapcacheController;
 use app\exceptions\GC2Exception;
 use app\exceptions\ServiceException;
 use app\inc\BasicAuth;
@@ -104,7 +105,40 @@ final class Mapcache extends AbstractApi
                     $service = strtolower($query['SERVICE'] ?? ($segments[0] ?? ''));
 
                     $layers = self::extractLayers($service, $segments, $query);
-                    if (empty($layers) && self::looksLikeTileFetch($segments, $query)) {
+                    // A merged per-schema tileset (a name with no dot) stands for every
+                    // layer in that schema, so expand it and authorize each: the merged
+                    // image shows them all, and the bare name on its own authorizes
+                    // nothing, because no layer is called that.
+                    // Resolve every name to something real before authorizing it. A
+                    // name that resolves to nothing must fail closed: treating an
+                    // unknown name as readable is what made the gmaps grid-suffix
+                    // bug serve a protected layer anonymously, and it would reopen
+                    // the same hole the moment another parser gap appeared.
+                    $expanded = [];
+                    $resolved = false;
+                    $connection = new Connection(database: $database);
+                    $configured = self::configuredTilesetNames();
+                    foreach ($layers as $l) {
+                        $ofSchema = self::schemaLayers(explode('.', $l)[0], $connection);
+                        if (!str_contains($l, '.')) {
+                            // The merged per-schema tileset stands for every layer in
+                            // the schema: the image shows them all, so the caller has
+                            // to be allowed to read them all.
+                            if (!empty($ofSchema)) {
+                                array_push($expanded, ...$ofSchema);
+                                $resolved = true;
+                            }
+                        } elseif (in_array($l, $ofSchema, true)) {
+                            $expanded[] = $l;
+                            $resolved = true;
+                        } elseif (in_array($l, $configured, true)) {
+                            // Declared by the operator outside the layer model; it has
+                            // no privileges to check. Resolved, nothing to authorize.
+                            $resolved = true;
+                        }
+                    }
+                    $layers = array_values(array_unique($expanded));
+                    if (!$resolved && self::looksLikeTileFetch($segments, $query)) {
                         // A tile fetch whose tileset we could not resolve: fail closed.
                         throw new GC2Exception('Could not resolve tileset for authorization', 403, null, 'FORBIDDEN');
                     }
@@ -184,9 +218,14 @@ final class Mapcache extends AbstractApi
                 }
                 break;
             case 'gmaps':
-                // gmaps/{tileset}/{grid}/{z}/{x}/{y}.ext
+                // gmaps/{tileset}@{grid}/{z}/{x}/{y}.ext — the same "@" form as TMS.
+                // Taking the segment raw made the layer name "<layer>@<grid>", which
+                // matches no layer, and authorize()'s anonymous branch then treated
+                // it as readable: a Read/write layer's tiles were served to an
+                // unauthenticated caller (200 image/png, measured). The grid must be
+                // split off here, exactly as TMS does.
                 if (!empty($segments[1])) {
-                    $tilesets = [$segments[1]];
+                    $tilesets = [explode('@', $segments[1])[0]];
                 }
                 break;
         }
@@ -194,7 +233,99 @@ final class Mapcache extends AbstractApi
             fn($t) => preg_replace('/\.(mvt|json)$/i', '', trim($t)),
             $tilesets
         );
-        return array_values(array_filter($layers, fn($l) => $l !== '' && str_contains($l, '.')));
+        // A name with no dot is kept: it is the merged per-schema tileset (<schema>,
+        // <schema>.mvt), which MapCache serves and GetCapabilities advertises.
+        // Dropping it used to make this return nothing, and the caller's
+        // fail-closed branch then answered every tile fetch with "Could not resolve
+        // tileset for authorization" — so a schema tileset could be listed and
+        // seeded but never fetched through the authorizing proxy.
+        return array_values(array_filter($layers, fn($l) => $l !== ''));
+    }
+
+    /**
+     * The tileset names an operator declared outside GC2's layer model, in
+     * app/conf/mapcache/tilesets/. They have no geometry_columns_join row, so they
+     * cannot be authorized per layer — declaring one is the operator's decision to
+     * serve it on the proxy's own terms, and they are allowed through for exactly
+     * that reason. Everything else that resolves to no layer fails closed.
+     *
+     * @return list<string>
+     */
+    public static function configuredTilesetNames(): array
+    {
+        $names = [];
+        foreach (MapcacheController::getTileSets() as $xml) {
+            if (preg_match('/<tileset\s+name="([^"]+)"/i', $xml, $m)) {
+                $names[] = $m[1];
+            }
+        }
+        return $names;
+    }
+
+    /**
+     * The OWS-enabled layers of a schema, as "schema.table".
+     *
+     * A merged per-schema tileset is drawn from every layer in the schema, so the
+     * caller has to be allowed to read every one of them — the same rule the WMS
+     * path already applies when one request names several layers. Without this
+     * expansion, authorizing the bare schema name checks nothing: the anonymous
+     * branch looks the name up with getGeometryColumns(), gets null because no
+     * layer is called that, and falls through to "readable anonymously". Measured:
+     * dagi.dagi_politikreds2000 is Read/write and answers 401 anonymously, while
+     * the dagi tileset that contains it answered 200.
+     *
+     * The same filter the config generator applies, so authorization and content
+     * cannot disagree about what the merged tileset contains: enableows, and never
+     * the sqlapi schema.
+     *
+     * @return list<string>
+     */
+    public static function schemaLayers(string $schema, Connection $connection): array
+    {
+        if ($schema === 'sqlapi' || !preg_match('/^[A-Za-z_][A-Za-z0-9_\-]*$/', $schema)) {
+            return [];
+        }
+        // settings.getColumns() and not settings.geometry_columns_join: dropping a
+        // table leaves its row behind in the join table (81 of 285 on the install
+        // this was written against), and the config generator does not see those
+        // because getColumns() joins the real catalog. Reading the join table
+        // directly would authorize layers the merged tileset does not contain, and
+        // would let a stale name pass the existence check that makes an
+        // unresolvable tileset fail closed — measured: a stale name reached the
+        // upstream MapCache where a name with no row at all was refused.
+        //
+        // The schema is checked against a positive class above before it goes into
+        // the WHERE fragment, which getColumns() takes as SQL text.
+        // getColumns() costs 18-90 ms on a database of this size — far too much for a
+        // tile path — so the list is cached for the same window the endpoint already
+        // accepts for its authorization decisions, and busted by
+        // Table::clearCacheOnSchemaChanges() so a layer added or removed normally
+        // takes effect at once rather than after the TTL.
+        $cacheKey = $connection->database . '_mapcacheSchemaLayers_' . md5($schema);
+        $item = Cache::getItem($cacheKey);
+        if ($item !== null && $item->isHit() && is_array($item->get())) {
+            return $item->get();
+        }
+
+        $model = new Model(connection: $connection);
+        $filter = "f_table_schema = '" . $schema . "' AND f_table_name NOTNULL AND f_geometry_column NOTNULL";
+        $rasterFilter = "r_table_schema = '" . $schema . "' AND r_table_name NOTNULL AND r_raster_column NOTNULL";
+        $res = $model->execQuery("SELECT f_table_schema, f_table_name, enableows FROM settings.getColumns("
+            . "'" . str_replace("'", "''", $filter) . "', '" . str_replace("'", "''", $rasterFilter) . "')");
+        $layers = [];
+        foreach ($model->fetchAll($res, 'assoc') as $row) {
+            if (!($row['enableows'] ?? true)) {
+                continue;
+            }
+            $layers[$row['f_table_schema'] . '.' . $row['f_table_name']] = true;
+        }
+        $names = array_keys($layers);
+        sort($names);
+        if ($item !== null) {
+            $item->set($names)->expiresAfter(self::AUTH_CACHE_TTL);
+            Cache::save($item);
+        }
+        return $names;
     }
 
     /**

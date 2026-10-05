@@ -11,19 +11,19 @@ set_time_limit(0);
 include_once(__DIR__ . "/../conf/App.php");
 include_once(__DIR__ . "/../vendor/autoload.php");
 
-
 use app\conf\App;
 use app\conf\Connection;
-use app\controllers\Tilecache;
 use app\inc\Cache;
 use app\inc\SchedulerLock;
 use app\inc\Util;
 use app\inc\WfsPaging;
-use app\models\Database;
 use app\models\Layer;
 use app\models\Table;
 
 new App();
+
+$memoryLimit = App::$param['memoryLimit'] ?? '128M';
+ini_set('memory_limit', $memoryLimit);
 
 Cache::setInstance();
 
@@ -64,6 +64,7 @@ $longopts = array(
     "downloadSchema:",
     "snapshot:",
     "snapshotFormats:",
+    "useSortBy:",
     "manual:",
     "name:",
 );
@@ -83,6 +84,9 @@ $preSql = $options["preSql"] == "null" ? null : base64_decode($options["preSql"]
 $postSql = $options["postSql"] == "null" ? null : base64_decode($options["postSql"]);
 $downloadSchema = $options["downloadSchema"];
 $snapshotAfterImport = $options["snapshot"] ?? null;
+// jobs.use_sortby: false for a WFS that rejects sortBy. Absent (a manual run of
+// this script, or a job row from before the column) keeps sorting on.
+$useSortBy = filter_var($options["useSortBy"] ?? true, FILTER_VALIDATE_BOOLEAN);
 // Per-job snapshot formats (base64 encoded JSON list, see Job::buildGetCmd).
 // Absent (or unusable) means the server default, SnapshotFormat::defaults().
 $snapshotFormats = null;
@@ -255,10 +259,11 @@ if (sizeof(explode("|http", $url)) > 1) {
     }
     $grid = null;
     // A plain WFS 2.0.0 GetFeature URL is paged with startIndex/count (and
-    // sortBy when it can be determined). Grid ("|") jobs and WFS 1.x keep
-    // their existing paths; an explicit startIndex means the caller pages.
+    // sortBy when it can be determined, unless the job set use_sortby false
+    // because its server rejects the parameter). Grid ("|") jobs and WFS 1.x
+    // keep their existing paths; an explicit startIndex means the caller pages.
     $wfsPaging = null;
-    if (!$getFunction && ($wfsPaging = WfsPaging::detect($url)) !== null) {
+    if (!$getFunction && ($wfsPaging = WfsPaging::detect($url, $useSortBy)) !== null) {
         print "\nInfo: WFS 2.0.0 GetFeature detected. Using startIndex/count paging (count={$wfsPaging->pageSize}).";
         $getFunction = "getCmdWfsPaging";
     }
@@ -269,11 +274,15 @@ if (sizeof(explode("|http", $url)) > 1) {
         // HEAD/GET) is not fatal -- the extension check below still decides.
         $ctx = stream_context_create(['http' => ['timeout' => 30]]);
         $headers = get_headers($url, false, $ctx) ?: [];
+        // Util::headersSayZip() rather than one exact spelling of the type: GC2's
+        // own SQL API answers "application/zip, application/octet-stream" for a
+        // format=ogr/… query, which an exact comparison misses — and the URL of
+        // such a query has no .zip for the extension check below to fall back on.
+        if (Util::headersSayZip($headers)) {
+            $getFunction = "getCmdZip";
+        }
         print "\n\nheaders\n";
         foreach ($headers as $header) {
-            if ($header == "Content-Type: application/zip") {
-                $getFunction = "getCmdZip";
-            }
             if (str_contains($header, "text/csv")) {
                 $contentIsCsv = true;
                 $getFunction = "getCmd";
@@ -984,8 +993,9 @@ function finalizePagedTables(): void
 
 /**
  * WFS 2.0.0 paging: fetches the job URL page by page with startIndex/count
- * (and sortBy when the DescribeFeatureType response has an id-like
- * property), loads each page like a grid cell, then unions the pages.
+ * (and sortBy when the DescribeFeatureType response has an id-like property,
+ * unless the job turned sorting off), loads each page like a grid cell, then
+ * unions the pages.
  */
 function getCmdWfsPaging(): void
 {
@@ -995,7 +1005,9 @@ function getCmdWfsPaging(): void
 
     print "\nInfo: Start WFS paged download (count={$wfsPaging->pageSize})...";
 
-    if ($wfsPaging->sortBy !== null) {
+    if (!$wfsPaging->useSortBy) {
+        print "\nInfo: sortBy is turned off for this job. Paging with startIndex/count only; the server must page in a stable order.";
+    } elseif ($wfsPaging->sortBy !== null) {
         print "\nInfo: sortBy from URL: {$wfsPaging->sortBy}";
     } else {
         $property = null;
@@ -1156,9 +1168,13 @@ function getCmdZip(): void
     $report[DOWNLOADTYPE] = ZIP;
 
     print "\nInfo: Fetching remote zip...";
+    // A neutral name: $extCheck2 is only set when the URL's extension decided
+    // this function, not when the response headers did (a format=ogr/… query has
+    // no extension at all), and the kind is read off the bytes below anyway.
+    $archivePath = $dir . "/" . $tempFile . ".download";
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
-    $fp = fopen($dir . "/" . $tempFile . "." . $extCheck2[0], 'w+');
+    $fp = fopen($archivePath, 'w+');
     curl_setopt($ch, CURLOPT_FILE, $fp);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -1174,21 +1190,29 @@ function getCmdZip(): void
         cleanUp();
         exit(1);
     }
-    $ext = array("shp", "tab", "geojson", "gml", "kml", "mif", "gdb", "csv", "json", "gpkg");
+    $ext = array("shp", "tab", "geojson", "gml", "kml", "mif", "gdb", "csv", "json", "gpkg", "fgb");
+
+    // Which kind of archive this is comes from the file's own first bytes. The
+    // condition here used to be `!strtolower($extCheck2[0]) == "gz"`, which ! binds
+    // before == and is therefore false for every input: the ZipArchive branch was
+    // unreachable and a zip was handed to gzopen(), which in transparent mode
+    // copies it byte for byte, so nothing was ever unpacked.
+    $archiveKind = Util::archiveKind($archivePath);
 
     // ZIP start
     // =========
-    if (!strtolower($extCheck2[0]) == "gz") {
+    if ($archiveKind !== 'gz') {
         $zip = new ZipArchive;
-        $res = $zip->open($dir . "/" . $tempFile . "." . $extCheck2[0]);
-        if ($res === false) {
+        $res = $zip->open($archivePath);
+        if ($res !== true) {
             print "Error: Could not unzip file";
+            $lastError = "could not unzip the downloaded file";
             cleanUp();
             exit(1);
         }
         $zip->extractTo($dir . "/" . $tempFile);
         $zip->close();
-        unlink($dir . "/" . $tempFile . "." . $extCheck2[0]);
+        unlink($archivePath);
     }
 
     // GZIP start
@@ -1196,9 +1220,9 @@ function getCmdZip(): void
     else {
         $bufferSize = 4096; // read 4kb at a time
         mkdir($dir . "/" . $tempFile);
-        $outFileName = str_replace('.gz', '', $dir . "/" . $tempFile . "/" . $tempFile . "." . $extCheck2[0]);
+        $outFileName = $dir . "/" . $tempFile . "/" . $tempFile;
 
-        $file = gzopen($dir . "/" . $tempFile . "." . $extCheck2[0], 'rb');
+        $file = gzopen($archivePath, 'rb');
 
         if (!$file) {
             print "Error: Could not gunzip file";
@@ -1655,14 +1679,21 @@ function cleanUp(int $success = 0): void
     print "\nInfo: Temp table dropped.";
 
     if ($success) {
+        // Touching the layer's metadata is not what the job succeeded at, and a
+        // source that legitimately held no features leaves nothing to touch: the
+        // relation was never created, so updateLastmodified() throws "columns not
+        // found" (see finalizePagedTables(), which reports success for an empty
+        // download). Nothing here may escape — cleanUp() is what finalises both
+        // the jobs row and the run registry, so a throw would hand the run to the
+        // shutdown hook, which can only call it "failed" and contradict the
+        // lastcheck written above.
         $layer = new Layer(connection: $conn);
-        $layer->updateLastmodified(schema: $schema, table: $safeName);
-        print "\nInfo: Last modified value updated";
         try {
+            $layer->updateLastmodified(schema: $schema, table: $safeName);
+            print "\nInfo: Last modified value updated";
             $layer->insertDefaultMeta();
-        } catch (PDOException $e) {
-            print "\nWarning: ";
-            print_r($e->getMessage());
+        } catch (Throwable $e) {
+            print "\nNotice: no layer metadata to update for {$schema}.{$safeName}: " . $e->getMessage();
         }
 
         print "\nInfo: Clear cache for layer $schema.$safeName";

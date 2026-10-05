@@ -440,12 +440,68 @@ SQL;
         $sqls[] = "ALTER TABLE settings.snapshots ADD CONSTRAINT snapshots_status_check CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'superseded'))";
         $sqls[] = "CREATE UNIQUE INDEX snapshots_published_unique_idx ON settings.snapshots (schema_name, relation_name, snapshot_date) WHERE status = 'succeeded'";
 
+        // A relation abstract holds a real description — the Danish grunddata in
+        // the "dk" database run to ~800 characters — which the original
+        // varchar(256) truncates with SQLSTATE 22001. The history table above is
+        // created with LIKE, so it carries the same narrow type and its audit
+        // trigger fails the write from behind; both have to be retyped. Guarded,
+        // so it happens once: Postgres refuses to alter a column a view selects,
+        // so the dependent view goes first and the Views1.php include below
+        // recreates it in the same run.
+        $sqls[] = "DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'settings'
+                             AND table_name = 'geometry_columns_join'
+                             AND column_name = 'f_table_abstract'
+                             AND data_type <> 'text') THEN
+                    DROP VIEW IF EXISTS settings.geometry_columns_view;
+                    ALTER TABLE settings.geometry_columns_join ALTER COLUMN f_table_abstract TYPE text;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'settings'
+                             AND table_name = 'geometry_columns_join_history'
+                             AND column_name = 'f_table_abstract'
+                             AND data_type <> 'text') THEN
+                    ALTER TABLE settings.geometry_columns_join_history ALTER COLUMN f_table_abstract TYPE text;
+                END IF;
+            END $$;";
+
+        // The tile seeder queue (docs/superpowers/specs/2026-09-30-tileseeder-v4-design.md):
+        // a seed is a row a worker claims, so status, log and cancel work from any node.
+        // pid and host are only known once a worker has claimed the row.
+        $sqls[] = "ALTER TABLE settings.seed_jobs ALTER COLUMN pid DROP NOT NULL";
+        $sqls[] = "ALTER TABLE settings.seed_jobs ALTER COLUMN host DROP NOT NULL";
+        foreach ([
+            'status' => 'VARCHAR(16)', 'username' => 'VARCHAR(255)', 'tileset' => 'VARCHAR(255)',
+            'grid' => 'VARCHAR(255)', 'zoom_start' => 'SMALLINT', 'zoom_end' => 'SMALLINT',
+            'extent_layer' => 'VARCHAR(255)', 'threads' => 'SMALLINT',
+            'started' => 'TIMESTAMPTZ', 'finished' => 'TIMESTAMPTZ', 'heartbeat' => 'TIMESTAMPTZ',
+            'cancel_requested' => 'TIMESTAMPTZ', 'error' => 'TEXT', 'log' => 'TEXT', 'log_path' => 'TEXT',
+        ] as $col => $type) {
+            $sqls[] = "ALTER TABLE settings.seed_jobs ADD COLUMN IF NOT EXISTS $col $type";
+        }
+        $sqls[] = "CREATE INDEX IF NOT EXISTS seed_jobs_status_created_idx ON settings.seed_jobs (status, created)";
+
+        // Per-schema tile settings for the merged <schema> tileset
+        // (docs/superpowers/specs/2026-10-01-schema-tile-settings-design.md).
+        // The row deliberately outlives its schema: dropping and recreating a
+        // schema is normal here, and the settings should survive it. A row for a
+        // schema that does not exist is never read, because Mapcachefile's
+        // per-schema loop iterates the schemas that actually have layers.
+        $sqls[] = "CREATE TABLE IF NOT EXISTS settings.schema_settings
+                    (
+                      schema  CHARACTER VARYING(255)    NOT NULL  PRIMARY KEY,
+                      def     JSONB,
+                      created TIMESTAMP WITH TIME ZONE  NOT NULL  DEFAULT now()
+                    )";
+
+        include 'Views1.php';
+
         // Geopartner additions / toggles
         // Disable history-triggers
         $sqls[] = "ALTER TABLE settings.geometry_columns_join DISABLE TRIGGER geometry_columns_join_history_tr";
         $sqls[] = "ALTER TABLE settings.key_value DISABLE TRIGGER key_value_history_tr";
-        
-        include 'Views1.php';
         return $sqls;
     }
 
@@ -492,6 +548,10 @@ SQL;
     public static function gc2scheduler(): array
     {
         $sqls[] = "ALTER TABLE jobs ALTER url TYPE TEXT";
+        // Opt out of the automatic WFS 2.0.0 sortBy (WfsPaging, get.php
+        // getCmdWfsPaging) for a server that rejects the parameter. Defaults to
+        // true, so existing jobs keep paging in a stable order.
+        $sqls[] = "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS use_sortby BOOLEAN DEFAULT true";
         $sqls[] = "ALTER TABLE jobs ADD COLUMN delete_append BOOL DEFAULT FALSE";
         $sqls[] = "ALTER TABLE jobs ADD COLUMN lastrun timestamp with time zone";
         $sqls[] = "ALTER TABLE jobs ADD COLUMN presql text";

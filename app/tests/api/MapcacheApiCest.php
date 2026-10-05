@@ -92,6 +92,19 @@ class MapcacheApiCest
             ]));
             $I->seeResponseCodeIs(HttpCode::CREATED);
         }
+        // A second schema whose only layer is public, so a merged schema tileset can
+        // be shown to pass authorization and not merely to be refused.
+        $I->sendPOST('/api/v4/schemas', json_encode(['name' => 's2']));
+        $I->seeResponseCodeIs(HttpCode::CREATED);
+        $I->sendPOST('/api/v4/schemas/s2/tables', json_encode([
+            'name' => 'openroads', 'columns' => [['name' => 'the_geom', 'type' => 'geometry(LineString,4326)']],
+        ]));
+        $I->seeResponseCodeIs(HttpCode::CREATED);
+        $I->sendPOST('/api/v4/layers', json_encode([
+            'name' => 's2.openroads.the_geom',
+            'classes' => [['name' => 'All', 'sortid' => 10, 'styles' => [['color' => '#008000', 'width' => '1']]]],
+        ]));
+        $I->seeResponseCodeIs(HttpCode::CREATED);
         $I->deleteHeader('Authorization');
 
         // Protect s1.protroads (Read/write) up front, so the anonymous deny cases are never served
@@ -155,11 +168,109 @@ class MapcacheApiCest
         $I->seeResponseCodeIs(HttpCode::UNAUTHORIZED);
     }
 
-    // A tile fetch whose tileset can't be resolved to a layer fails closed.
+    /**
+     * A merged per-schema tileset is drawn from every layer in the schema, so it
+     * inherits the strictest one's requirement: s1 contains the Read/write
+     * s1.protroads, so the bare "s1" tileset must be challenged too.
+     *
+     * Without the expansion this answered 200: the bare name authorizes nothing,
+     * because getGeometryColumns() finds no layer called "s1" and the anonymous
+     * branch then treats it as readable. That made the merged tileset a way to
+     * read a protected layer's pixels without credentials.
+     */
+    public function schemaTilesetAnonymousIsChallengedWhenItHoldsAProtectedLayer(ApiTester $I)
+    {
+        $this->anonymous($I);
+        $I->sendGET($this->wmtsRestful('s1'));
+        $I->seeResponseCodeIs(HttpCode::UNAUTHORIZED);
+        // And over TMS, where the grid is glued to the name with "@".
+        $I->sendGET($this->tms('s1'));
+        $I->seeResponseCodeIs(HttpCode::UNAUTHORIZED);
+    }
+
+    public function schemaTilesetWithCorrectBasicPassesAuth(ApiTester $I)
+    {
+        $this->basic($I, $this->userId, $this->password);
+        $I->sendGET($this->wmtsRestful('s1'));
+        $this->seePastAuth($I);
+    }
+
+    /**
+     * The case that was reported broken: a schema whose layers are all readable
+     * must serve its merged tileset. It used to answer 403 "Could not resolve
+     * tileset for authorization" through every service, because a name without a
+     * dot was discarded before authorization could happen.
+     */
+    public function schemaTilesetOfAPublicSchemaPassesAuth(ApiTester $I)
+    {
+        $this->anonymous($I);
+        $I->sendGET($this->wmtsRestful('s2'));
+        $this->seePastAuth($I);
+        $I->sendGET($this->tms('s2'));
+        $this->seePastAuth($I);
+        // The vector variant resolves to the same schema.
+        $I->sendGET($this->tms('s2.mvt'));
+        $this->seePastAuth($I);
+    }
+
+    /**
+     * A tile fetch whose tileset resolves to nothing fails closed. A name without a
+     * dot is now read as a schema, so this is unresolvable because no such schema
+     * has layers — not because it lacks a dot.
+     */
     public function unresolvableTilesetFailsClosed(ApiTester $I)
     {
         $this->anonymous($I);
         $I->sendGET($this->wmtsRestful('notqualified'));
         $I->seeResponseCodeIs(HttpCode::FORBIDDEN);
+    }
+
+    /**
+     * SECURITY regression. MapCache's gmaps URL is gmaps/{tileset}@{grid}/…, so the
+     * proxy used to read the layer name as "s1.protroads@g20", match no layer, and
+     * fall through to "readable anonymously" — serving a Read/write layer's tiles
+     * to an unauthenticated caller (measured: 200 image/png, 7954 bytes, on a real
+     * protected layer). Present since the proxy was introduced in 731bf91a.
+     */
+    public function gmapsProtectedLayerAnonymousIsChallenged(ApiTester $I)
+    {
+        $this->anonymous($I);
+        $I->sendGET($this->gmaps('s1.protroads'));
+        $I->seeResponseCodeIs(HttpCode::UNAUTHORIZED);
+    }
+
+    public function gmapsProtectedLayerCorrectBasicPassesAuth(ApiTester $I)
+    {
+        $this->basic($I, $this->userId, $this->password);
+        $I->sendGET($this->gmaps('s1.protroads'));
+        $this->seePastAuth($I);
+    }
+
+    /**
+     * A name that looks like a layer but is none must fail closed, not fall through
+     * to "readable anonymously". That fall-through is what made the gmaps hole
+     * exploitable, and it would reopen it the moment any parser gap appears.
+     */
+    public function aDottedNameThatIsNoLayerFailsClosed(ApiTester $I)
+    {
+        $this->anonymous($I);
+        $I->sendGET($this->wmtsRestful('s1.no_such_table'));
+        $I->seeResponseCodeIs(HttpCode::FORBIDDEN);
+        $I->sendGET($this->wmtsRestful('nosuchschema.nosuchtable'));
+        $I->seeResponseCodeIs(HttpCode::FORBIDDEN);
+        // And with a valid token: unresolvable is unresolvable, not a privilege question.
+        $this->bearer($I);
+        $I->sendGET($this->wmtsRestful('s1.no_such_table'));
+        $I->seeResponseCodeIs(HttpCode::FORBIDDEN);
+    }
+
+    private function gmaps(string $tileset): string
+    {
+        return '/api/v4/mapcache/database/' . $this->userId . '/gmaps/' . $tileset . '@g20/8/136/78.png';
+    }
+
+    private function tms(string $tileset): string
+    {
+        return '/api/v4/mapcache/database/' . $this->userId . '/tms/1.0.0/' . $tileset . '@g20/8/136/78.png';
     }
 }
