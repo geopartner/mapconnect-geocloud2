@@ -62,9 +62,15 @@ class Authorization extends Model
         if ($auth === "Read/write" || $auth === "Write") {
             $rows = $this->getColumns($schema, $unQualifiedName);
 
+            // BUG:Merge privileges from all rows using the same ranking rules as extractHighestPrivilege
             $mergedPrivileges = [];
+            $rank = [
+                'none' => 0,
+                'read' => 1,
+                'write' => 2,
+                'read/write' => 2,
+            ];
 
-            // BUG: Merge privileges from all rows for the given subuser and user group
             foreach ($rows as $row) {
                 if (!empty($row["privileges"])) {
                     $privileges = json_decode($row["privileges"], true);
@@ -72,7 +78,11 @@ class Authorization extends Model
                         if (!isset($mergedPrivileges[$key])) {
                             $mergedPrivileges[$key] = $value;
                         } else {
-                            $mergedPrivileges[$key] = max($mergedPrivileges[$key], $value);
+                            $currentRank = $rank[$mergedPrivileges[$key]] ?? 0;
+                            $newRank = $rank[$value] ?? 0;
+                            if ($newRank > $currentRank) {
+                                $mergedPrivileges[$key] = $value;
+                            }
                         }
                     }
                 }
