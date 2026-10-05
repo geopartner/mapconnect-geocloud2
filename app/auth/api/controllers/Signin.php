@@ -45,7 +45,7 @@ class Signin extends AbstractApi
     public function post_index(): Response
     {
         $userObj = new User();
-        if (isset($_POST['database'], $_POST['user'], $_POST['password']) && $_POST['database'] && $_POST['user'] && $_POST['password'] && !(isset($_POST['tf_code']) && $_POST['tf_code'])) {
+        if ($_POST['database'] && $_POST['user'] && $_POST['password'] && !$_POST['tf_code']) {
             try {
                 $res = $userObj->getDatabasesForUser($_POST['user']);
                 // Check if user/password is correct
@@ -54,7 +54,7 @@ class Signin extends AbstractApi
                 $sessionModel->stop();
                 // Check if client has two factor enabled
                 $client = new Client(connection: new Connection(database: $_POST['database']));
-                $clientData = $client->get($_POST['client_id'] ?? null);
+                $clientData = $client->get($_POST['client_id']);
                 if (!$clientData[0]['two_factor']) {
                     Session::start();
                     $sessionModel->start($_POST['user'], $_POST['password'], "public", $_POST['database']);
@@ -72,7 +72,7 @@ class Signin extends AbstractApi
                 // Create key/value
                 $val = Jwt::generateUserCode();
                 $key = '__twofactor_' . md5($_POST['user']) . '_' . $_POST['database'];
-                $userObj->cacheCode($key, $val);
+                $userObj->cacheCode($key, $val, 600);
                 // Send email
                 $client = new PostmarkClient(App::$param["notification"]["key"]);
                 if (empty($email)) {
@@ -99,20 +99,18 @@ class Signin extends AbstractApi
             } catch (Exception $e) {
                 unset($_POST['password']);
                 echo "<div id='alert' hx-swap-oob='true'>" . $this->twig->render('error.html.twig', ['message' => $e->getMessage()]) . "</div>";
-                if (isset($_POST['parentdb'])) {
-                    echo "<div id='forgot' hx-swap-oob='true'><a href='/forgot?parentdb={$_POST['parentdb']}'>Forgot the password?</a></div>";
-                }
+                echo "<div id='forgot' hx-swap-oob='true'><a href='/forgot?parentdb={$_POST['parentdb']}'>Forgot the password?</a></div>";
             }
             echo $this->twig->render('signin.html.twig', [...$res ?? [], ...$_POST]);
             return $this->emptyResponse();
 
-        } elseif (isset($_POST['database'], $_POST['user'], $_POST['password'], $_POST['tf_code']) && $_POST['database'] && $_POST['user'] && $_POST['password'] && $_POST['tf_code']) {
+        } elseif ($_POST['database'] && $_POST['user'] && $_POST['password'] && $_POST['tf_code']) {
             $res = $userObj->getDatabasesForUser($_POST['user']);
             // Check if key is correct
             $key = '__twofactor_' . md5($_POST['user']) . '_' . $_POST['database'];
             try {
                 $val = $userObj->getCode($key);
-                if ($val !== $_POST['tf_code']) {
+                if (!hash_equals((string)$val, (string)$_POST['tf_code'])) {
                     echo $this->twig->render('signin.html.twig', [...$res, ...$_POST]);
                     echo "<div id='alert' hx-swap-oob='true'>" . $this->twig->render('error.html.twig', ['message' => 'One-time code is wrong']) . "</div>";
                     return $this->emptyResponse();
@@ -135,13 +133,13 @@ class Signin extends AbstractApi
             }
             return $this->emptyResponse();
 
-        } elseif (isset($_POST['user']) && $_POST['user']) {
+        } elseif ($_POST['user']) {
             // Get database for user
             try {
                 $res = (new User())->getDatabasesForUser($_POST['user']);
                 $check = false;
                 foreach ($res['databases'] as $db) {
-                    if ($db['parentdb'] == ($_POST['database'] ?? null) || empty($_POST['parentdb'] ?? null)) {
+                    if ($db['parentdb'] == $_POST['database'] || empty($_POST['parentdb'])) {
                         $check = true;
                     }
                 }

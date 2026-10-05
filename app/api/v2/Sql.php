@@ -66,15 +66,15 @@ class Sql extends Controller
         // Get the URI params from request
         // /{user}
         $r = func_get_arg(0);
+        [$this->subUser, $database] = Util::extractUserFromSubUserString($r["user"]);
+        $this->connection = new \app\inc\Connection(database: $database);
         try {
             $this->api = func_get_arg(1);
         } catch (Throwable) {
             $srs = is_numeric(Input::get('srs')) ? Input::get('srs') : 3857;
-            $this->api = new \app\models\Sql();
+            $this->api = new \app\models\Sql(connection: $this->connection);
             $this->api->connect();
         }
-        [$this->subUser, $database] = Util::extractUserFromSubUserString($r["user"]);
-        $this->connection = new \app\inc\Connection(database: $database);
 
         // Check if body is JSON
         // Supports both GET and POST
@@ -170,7 +170,8 @@ class Sql extends Controller
 
         // Use bulk if content type is text/plain
         if (Input::getContentType() == Input::TEXT_PLAIN) {
-            [$this->subUser] = Util::extractUserFromSubUserString($r["user"]);
+            [$this->subUser, $database] = Util::extractUserFromSubUserString($r["user"]);
+            $this->connection = new \app\inc\Connection(database: $database);
             if (!empty($_SESSION["subuser"])) {
                 $this->subUser = $_SESSION["screen_name"];
             }
@@ -190,7 +191,7 @@ class Sql extends Controller
                 return $res;
             }
 
-            $this->api = new \app\models\Sql();
+            $this->api = new \app\models\Sql(connection: $this->connection);
             $this->api->connect();
             $this->apiKey = $res['data']->api_key;
 

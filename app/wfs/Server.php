@@ -16,6 +16,7 @@ use app\exceptions\OwsException;
 use app\exceptions\ServiceException;
 use app\inc\BasicAuth;
 use app\inc\Input;
+use app\models\Authorization;
 use app\wfs\output\GmlWriter;
 use Psr\Cache\InvalidArgumentException;
 use Throwable;
@@ -40,9 +41,7 @@ final class Server
     {
         $this->validateProtocol($req);
         if ($req->operation !== 'GETCAPABILITIES') {
-            $this->checkLayerEnabled($req);
-            $this->basicAuthPerLayer($req);
-
+            self::assertLayersEnabled($this->ctx, $req);
         }
 
         $class = self::HANDLERS[$req->operation]
@@ -77,40 +76,22 @@ final class Server
     }
 
     /**
+     * Every requested typeName must be an OWS-enabled layer. Public so the OGC API Features
+     * controller, which drives the GetFeature handler directly, applies the same gate.
+     *
      * @throws OwsException
      */
-    private function checkLayerEnabled(Request $req): void
+    public static function assertLayersEnabled(Context $ctx, Request $req): void
     {
         if (empty($req->typeNames)) return;
-        $model = $this->ctx->model();
+        $model = $ctx->model();
         foreach ($req->typeNames as $tn) {
-            $row = $model->getGeometryColumns("{$this->ctx->schema}.$tn", '*');
+            $row = $model->getGeometryColumns("{$ctx->schema}.$tn", '*');
             if (empty($row['enableows'])) {
                 throw new OwsException(
                     'Layer is not enabled',
                     attributes: ['exceptionCode' => 'InvalidParameterValue', 'locator' => 'typename']
                 );
-            }
-        }
-    }
-
-    /**
-     * @throws ServiceException
-     * @throws Throwable
-     * @throws InvalidArgumentException
-     */
-    private function basicAuthPerLayer(Request $req): void
-    {
-        if ($this->ctx->trusted || empty($req->typeNames)) return;
-        $model = $this->ctx->model();
-        $isTransaction = $req->operation === 'TRANSACTION';
-        foreach ($req->typeNames as $tn) {
-            $auth = $model->getGeometryColumns("{$this->ctx->schema}.$tn", 'authentication');
-            $needsAuth = $auth === 'Read/write'
-                || ($isTransaction && ($auth === 'Write' || $auth === 'Read/write'))
-                || !empty(Input::getAuthUser());
-            if ($needsAuth) {
-                new BasicAuth()->authenticate("{$this->ctx->schema}.$tn", $isTransaction);
             }
         }
     }

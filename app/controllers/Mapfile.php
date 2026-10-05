@@ -1,8 +1,7 @@
 <?php
 /**
  * @author     Martin Høgh <mh@mapcentia.com>
- * @copyright  2013-2021 MapCentia ApS
- * @copyright  2025 Geopartner Landinspektører A/S
+ * @copyright  2013-2026 MapCentia ApS
  * @license    http://www.gnu.org/licenses/#AGPL  GNU AFFERO GENERAL PUBLIC LICENSE 3
  */
 
@@ -16,7 +15,7 @@ class Mapfile extends Controller
 {
     /**
      * @return array<array<bool|string>>
-     * @throws PhpfastcacheInvalidArgumentException
+     * @throws PhpfastcacheInvalidArgumentException|\Psr\Cache\InvalidArgumentException
      */
     public function get_index(): array
     {

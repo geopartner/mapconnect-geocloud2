@@ -16,6 +16,7 @@ use app\api\v4\Controller;
 use app\api\v4\Responses\GetResponse;
 use app\api\v4\Responses\NoContentResponse;
 use app\api\v4\Responses\Response;
+use app\api\v4\Responses\StreamedResponse;
 use app\api\v4\Scope;
 use app\exceptions\GC2Exception;
 use app\inc\Connection;
@@ -23,14 +24,11 @@ use app\inc\Input;
 use app\inc\Route2;
 use app\inc\Statement;
 use app\inc\Util;
-use app\models\Setting;
-use Exception;
 use OpenApi\Annotations\OpenApi;
 use OpenApi\Attributes as OA;
-use Psr\Cache\InvalidArgumentException;
 use Symfony\Component\Validator\Constraints as Assert;
 use Override;
-use Phpfastcache\Exceptions\PhpfastcacheInvalidArgumentException;
+use Throwable;
 
 
 /**
@@ -189,6 +187,7 @@ class Sql extends AbstractApi
     /**
      * @return Response
      * @throws GC2Exception
+     * @throws Throwable
      */
     #[OA\Post(path: '/api/v4/sql', operationId: 'postSql', description: "Execute SQL statements.", tags: ['Sql'])]
     #[OA\RequestBody(description: 'SQL statement(s) to execute.', required: true, content: new OA\JsonContent(ref: "#/components/schemas/SqlRequest"))]
@@ -206,23 +205,54 @@ class Sql extends AbstractApi
         if (!array_is_list($decodedBody)) {
             $decodedBody = [$decodedBody];
         }
-        $result = [];
-        // Execute SQL statements
-        $this->sqlApi->withTransaction(function () use (&$result, $decodedBody, $user, $isSuperUser, $userGroup) {
-            foreach ($decodedBody as $query) {
-                $srs = $query['srs'] ?? 4326;
-                $this->sqlApi->setSRS($srs);
-                $query['srs'] = $srs;
-                // In REST context the id is set
-                if (!isset($query['id'])) {
-                    $query['id'] = Util::guid();
-                }
-                $res = $this->runStatement($query, $user, $isSuperUser, $userGroup);
-                if ($res !== null) {
-                    $result[] = $res;
-                }
+
+        $streamedFormats = ['ccsv', 'csv', 'ndjson', 'excel'];
+        $containsStreamedFormat = false;
+        foreach ($decodedBody as $query) {
+            if (isset($query['output_format']) && in_array($query['output_format'], $streamedFormats)) {
+                $containsStreamedFormat = true;
             }
-        });
+        }
+        if ($containsStreamedFormat && count($decodedBody) > 1) {
+            throw new GC2Exception("Streamed formats are not supported for multiple queries.", 400, null, "BAD_REQUEST");
+        }
+
+        $func = function () use (&$result, $decodedBody, $user, $isSuperUser, $userGroup) {
+            $this->sqlApi->withTransaction(function () use (&$result, $decodedBody, $user, $isSuperUser, $userGroup) {
+                foreach ($decodedBody as $query) {
+                    $srs = $query['srs'] ?? 4326;
+                    $this->sqlApi->setSRS($srs);
+                    $query['srs'] = $srs;
+                    // In REST context the id is set
+                    if (!isset($query['id'])) {
+                        $query['id'] = Util::guid();
+                    }
+                    $res = $this->runStatement($query, $user, $isSuperUser, $userGroup);
+                    if ($res !== null) {
+                        $result[] = $res;
+                    }
+                }
+            });
+        };
+
+
+        if ($containsStreamedFormat) {
+            $contentType = match ($decodedBody[0]['output_format']) {
+                'csv' => 'text/csv; charset=UTF-8',
+                'excel' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; charset=UTF-8',
+                default => 'text/plain; charset=utf-8',
+            };
+            return new StreamedResponse(
+                contentType: $contentType,
+                callback: $func
+            );
+        }
+
+        $result = [];
+
+        // Execute SQL statements
+        $func();
+
         // Return response
         if (count($result) == 0) {
             return new NoContentResponse();
@@ -238,7 +268,7 @@ class Sql extends AbstractApi
     /**
      * @throws GC2Exception
      */
-    private function runStatement(array $query, string $user, bool $isSuperUser, ?string $userGroup): ?array
+    private function runStatement(array $query, string $user, bool $isSuperUser, ?array $userGroup): ?array
     {
         $statement = new Statement(connection: $this->connection, convertReturning: true);
         $query['convert_types'] = $value['convert_types'] ?? true;
