@@ -81,11 +81,11 @@ final class BasicAuth
             //}
 
             // Improved: Direct SQL query to check privileges and limit SQL injection (even if the layer no longer exists)
-            $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ LIKE :key";
+            $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ = :key";
             $postgisObject = new Model(connection: $this->connection);
             $res = $postgisObject->prepare($sql);
             try {
-                $postgisObject->execute($res, array("key" => $layerName . ".%"));
+                $postgisObject->execute($res, array("key" => $layerName));
             } catch (PDOException $e) {
                 throw new ServiceException($e->getMessage());
             }
