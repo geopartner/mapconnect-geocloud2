@@ -67,16 +67,29 @@ final class BasicAuth
         $split = explode(".", $layerName);
         $schema = $split[0];
         if ($this->isSubuser && $this->user != $schema) {
-            $schema = $split[0];
-            $table = $split[1];
-            $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
+
+            // Old inefficient method for checking privileges, now commented out.
+            //$schema = $split[0];
+            //$table = $split[1];
+            //$sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
+            //$postgisObject = new Model(connection: $this->connection);
+            //$res = $postgisObject->prepare($sql);
+            //try {
+            //    $postgisObject->execute($res);
+            //} catch (PDOException $e) {
+            //    throw new ServiceException($e->getMessage());
+            //}
+
+            // Improved: Direct SQL query to check privileges and limit SQL injection (even if the layer no longer exists)
+            $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ = :key";
             $postgisObject = new Model(connection: $this->connection);
             $res = $postgisObject->prepare($sql);
             try {
-                $postgisObject->execute($res);
+                $postgisObject->execute($res, array("key" => $layerName));
             } catch (PDOException $e) {
                 throw new ServiceException($e->getMessage());
             }
+
             while ($row = $postgisObject->fetchRow($res)) {
                 $privileges = json_decode($row["privileges"], true);
                 $authorization = new Authorization(connection: $this->connection);

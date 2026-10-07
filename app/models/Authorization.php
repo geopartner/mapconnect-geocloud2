@@ -69,6 +69,7 @@ class Authorization extends Model
                 'read' => 1,
                 'write' => 2,
                 'read/write' => 2,
+                'all' => 3,
             ];
 
             foreach ($rows as $row) {
@@ -186,6 +187,7 @@ class Authorization extends Model
             'read' => 1,
             'write' => 2,
             'read/write' => 2,
+            'all' => 3,
         ];
         $highest = array_reduce(
             $values,
