@@ -219,14 +219,10 @@ class Controller
     public function ApiKeyAuthLayer(string $layer, bool $transaction, array $rels, ?string $subUser = null, ?string $inputApiKey = null): ?array
     {
         $response = new Setting(connection: $this->connection)->get();
-        $originalDatabase = $this->connection->database;
         if ($subUser) {
             $apiKey = $response['data']->api_key_subuser->$subUser;
             $group = !empty($response['data']->userGroups->$subUser) ? json_decode($response['data']->userGroups->$subUser) : null;
-            // BUG: the User() sets the database to mapcentia, but doesnt unset it - caused rest of the code to run in the wrong database
-            $userGroupFullChain = $group ? new User(connection: $this->connection)->getFullInheritance($group, $this->connection->database) : null;
-            // Reset the database to the original one after fetching the full inheritance
-            $this->connection->database = $originalDatabase;
+            $userGroupFullChain = $group ? new User()->getFullInheritance($group, $this->connection->database) : null;
         } else {
             $apiKey = $response['data']->api_key;
         }
