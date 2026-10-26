@@ -502,6 +502,9 @@ SQL;
         // Disable history-triggers
         $sqls[] = "ALTER TABLE settings.geometry_columns_join DISABLE TRIGGER geometry_columns_join_history_tr";
         $sqls[] = "ALTER TABLE settings.key_value DISABLE TRIGGER key_value_history_tr";
+
+        // Make sure uuid-ossp exists in public
+        $sqls[] = "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA public";
         return $sqls;
     }
 
