@@ -1068,7 +1068,7 @@ $(document).ready(function () {
                                             "<li>" + "<b>" + __("All") + "</b>: " + __("The sub-user change properties like style and alter table structure.") + "</li>" +
                                             "<ul>" +
                                             "<br><p>" +
-                                            __("If a sub-user is set to inherit the privileges of another sub-user, you can't change the privileges of the sub-user.") +
+                                            __("A sub-user that inherits can also be given its own privileges. The highest of its own and the inherited privileges applies.") +
                                             "</p>" +
                                             "<br><p>" +
                                             __("The privileges are granted for both Admin and external services like WMS and WFS.") +
