@@ -69,6 +69,17 @@ final class BasicAuth
         // AUTHENTICATION SUCCESSFUL
         $split = explode(".", $layerName);
         $schema = $split[0];
+        $table = $split[1];
+
+        // If the split only only contains schema & table, we need to get the table geometry aswell
+        if (count($split) == 2) {
+            $geometry = (new Model(connection: $this->connection))->getGeometryColumns($layerName, 'f_geometry_column');
+            // Append the geometry column to the table name for further processing
+            if ($geometry) {
+                $layerName .= '.' . $geometry;
+            }
+        }
+
         if ($this->isSubuser && $this->user != $schema) {
 
             // Old inefficient method for checking privileges, now commented out.

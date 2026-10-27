@@ -872,7 +872,7 @@ class Model
             } else {
                 $_schema = str_replace(".", "", $_schema);
             }
-            $row = $this->getColumns($_schema, $_table)[0] ?? null;
+            $row = $this->getColumns($_schema, $_table)[0] ?? null; // TODO: How will this handle cases where multiple rows are returned? like layers with multiple geometry columns!?
             if (!$row) {
                 return null;
             } else {
