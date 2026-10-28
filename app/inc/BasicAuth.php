@@ -63,22 +63,36 @@ final class BasicAuth
         $userGroup = !empty($settings["data"]->userGroups->{$this->user}) ? json_decode($settings["data"]->userGroups->{$this->user}) : [];
         $userGroupFullChain = new User()->getFullInheritance($userGroup, $this->connection->database);
 
+        // Deny Exception
+        $denyAccessException = new ServiceException("You don't have privileges to this layer. Please contact the database owner, which can grant you privileges.");
+
         // AUTHENTICATION SUCCESSFUL
         $split = explode(".", $layerName);
         $schema = $split[0];
+        $table = $split[1];
+
+        // If the split only only contains schema & table, we need to get the table geometry aswell
+        if (count($split) == 2) {
+            $geometry = (new Model(connection: $this->connection))->getGeometryColumns($layerName, 'f_geometry_column');
+            // Append the geometry column to the table name for further processing
+            if ($geometry) {
+                $layerName .= '.' . $geometry;
+            }
+        }
+
         if ($this->isSubuser && $this->user != $schema) {
 
             // Old inefficient method for checking privileges, now commented out.
-            //$schema = $split[0];
-            //$table = $split[1];
-            //$sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
-            //$postgisObject = new Model(connection: $this->connection);
-            //$res = $postgisObject->prepare($sql);
-            //try {
+            // $schema = $split[0];
+            // $table = $split[1];
+            // $sql = "SELECT * FROM settings.getColumns('f_table_schema = ''$schema'' AND f_table_name = ''$table''', 'r_table_schema = ''$schema'' AND r_table_name = ''$table''')";
+            // $postgisObject = new Model(connection: $this->connection);
+            // $res = $postgisObject->prepare($sql);
+            // try {
             //    $postgisObject->execute($res);
-            //} catch (PDOException $e) {
+            // } catch (PDOException $e) {
             //    throw new ServiceException($e->getMessage());
-            //}
+            // }
 
             // Improved: Direct SQL query to check privileges and limit SQL injection (even if the layer no longer exists)
             $sql = "SELECT privileges FROM settings.geometry_columns_join WHERE _key_ = :key";
@@ -90,16 +104,22 @@ final class BasicAuth
                 throw new ServiceException($e->getMessage());
             }
 
+            $found = false;
             while ($row = $postgisObject->fetchRow($res)) {
+                $found = true;
                 $privileges = json_decode($row["privileges"], true);
                 $authorization = new Authorization(connection: $this->connection);
                 $privilege = $authorization->extractHighestPrivilege($privileges ?? [], $this->user, $userGroupFullChain);
                 $isOwner = $authorization->isOwner($this->user, $userGroupFullChain, $schema);
                 $insufficient = ($privilege === "none" || ($privilege === "read" && $isTransaction));
                 if ($insufficient && !$isOwner) {
-                    throw new ServiceException("You don't have privileges to this layer. Please contact the database owner, which can grant you privileges.");
+                    throw $denyAccessException;
                 }
             }
+            // If no rows were found, deny access immediately
+            if (!$found) {
+                throw $denyAccessException;
+            } 
         }
     }
 

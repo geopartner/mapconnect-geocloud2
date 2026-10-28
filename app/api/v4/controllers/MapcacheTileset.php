@@ -367,7 +367,7 @@ final class MapcacheTileset extends AbstractApi
                 return;
             }
             $privileges = json_decode((string)new Model(connection: $connection)->getGeometryColumns($layer, 'privileges'), true) ?: [];
-            if ($auth->extractHighestPrivilege($privileges, $jwt['uid'], $chain) === 'read/write') {
+            if (in_array($auth->extractHighestPrivilege($privileges, $jwt['uid'], $chain), ['write', 'all'], true)) {
                 return;
             }
             throw new GC2Exception('Insufficient privileges to delete the tile cache', 403, null, 'INSUFFICIENT_PRIVILEGES');

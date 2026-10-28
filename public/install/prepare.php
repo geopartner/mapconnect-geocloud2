@@ -8,6 +8,7 @@
 
 
 use app\conf\App;
+use app\inc\Util;
 use app\inc\Cache;
 use app\inc\Connection;
 use app\migration\Sql;
@@ -248,32 +249,53 @@ if ($dbName) {
                         $userExists = true;
                         echo '<div class="alert alert-success mt-3">Owner user for database ' . htmlspecialchars((string)$dbName) . ' already exists. Skipping creation.</div>';
                     } catch (\Throwable) {
-                        // Handle create owner user submission
-                        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_owner'])) {
-                            $ownerEmail = trim((string)($_POST['owner_email'] ?? ''));
-                            $ownerPassword = trim((string)($_POST['owner_password'] ?? ''));
-                            if ($ownerEmail === '' || $ownerPassword === '') {
-                                echo '<div class="alert alert-danger mt-3">Please provide both email and password to create the owner user.</div>';
+
+                        // Automatically create an admin user with a strong password if it does not exist, otherwise we cannot access it from dashboard.
+                        try {
+                            // Create the owner user record in mapcentia; name must be the database name
+                            $result = $userModel->createUser([
+                                    'name' => (string)$dbName,
+                                    'email' => 'databaseuser@' . (string)$dbName . '.local',
+                                    'password' => (string)(new Util())->generateStrongPassword(),
+                                    'subuser' => false
+                            ]);
+                            if (!empty($result['success'])) {
+                                echo '<div class="alert alert-success mt-3">Owner user for database ' . htmlspecialchars((string)$dbName) . ' was created successfully.</div>';
+                                $userExists = true;
                             } else {
-                                try {
-                                    // Create the owner user record in mapcentia; name must be the database name
-                                    $result = $userModel->createUser([
-                                            'name' => (string)$dbName,
-                                            'email' => $ownerEmail,
-                                            'password' => $ownerPassword,
-                                            'subuser' => false
-                                    ]);
-                                    if (!empty($result['success'])) {
-                                        echo '<div class="alert alert-success mt-3">Owner user for database ' . htmlspecialchars((string)$dbName) . ' was created successfully.</div>';
-                                        $userExists = true;
-                                    } else {
-                                        echo '<div class="alert alert-danger mt-3">Could not create owner user. Please try again.</div>';
-                                    }
-                                } catch (\Throwable $e) {
-                                    echo '<div class="alert alert-danger mt-3">Failed to create owner user: ' . htmlspecialchars($e->getMessage()) . '</div>';
-                                }
+                                echo '<div class="alert alert-danger mt-3">Could not create owner user. Please try again.</div>';
                             }
+                        } catch (\Throwable $e) {
+                            echo '<div class="alert alert-danger mt-3">Failed to create owner user: ' . htmlspecialchars($e->getMessage()) . '</div>';
                         }
+                        
+                        // Disabled manual creation of owner user
+                        // Handle create owner user submission
+                        //if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_owner'])) {
+                        //    $ownerEmail = trim((string)($_POST['owner_email'] ?? ''));
+                        //    $ownerPassword = trim((string)($_POST['owner_password'] ?? ''));
+                        //    if ($ownerEmail === '' || $ownerPassword === '') {
+                        //        echo '<div class="alert alert-danger mt-3">Please provide both email and password to create the owner user.</div>';
+                        //    } else {
+                        //        try {
+                        //            // Create the owner user record in mapcentia; name must be the database name
+                        //            $result = $userModel->createUser([
+                        //                    'name' => (string)$dbName,
+                        //                    'email' => $ownerEmail,
+                        //                    'password' => $ownerPassword,
+                        //                    'subuser' => false
+                        //            ]);
+                        //            if (!empty($result['success'])) {
+                        //                echo '<div class="alert alert-success mt-3">Owner user for database ' . htmlspecialchars((string)$dbName) . ' was created successfully.</div>';
+                        //                $userExists = true;
+                        //            } else {
+                        //                echo '<div class="alert alert-danger mt-3">Could not create owner user. Please try again.</div>';
+                        //            }
+                        //        } catch (\Throwable $e) {
+                        //            echo '<div class="alert alert-danger mt-3">Failed to create owner user: ' . htmlspecialchars($e->getMessage()) . '</div>';
+                        //        }
+                        //    }
+                        //}
 
                         // Show form to create owner user
                         if (!$userExists) {

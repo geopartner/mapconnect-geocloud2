@@ -13,7 +13,7 @@
     "containers.SubuserPage.descriptionEdit": "Lad adgangskodefeltet være tomt for at beholde det nuværende.",
     "containers.SubuserPage.descriptionCreateSchema": "Du kan vælge at oprette et skema for den nye sub-bruger. Sub-bruger vil kunne oprette nye lag med alle privilegier inde i skemaet. Sub-bruger vil også kunne give privilegier på lag inde i skemaet til andre. Du kan også oprette skemaet senere - brug bare navnet på sub-bruger.",
     "containers.SubuserPage.descriptionInheritPrivilegesCreate": "Nedarv privilegierne fra en anden sub-bruger. Hvis valgt, vil den nye sub-bruger have de samme privilegier som den valgte. Det vil sige, den valgte sub-bruger vil fungere som en brugergruppe. Du vil ikke være i stand til at give privilegier direkte til den nye sub-bruger.",
-    "containers.SubuserPage.descriptionInheritPrivilegesEdit": "Nedarv privilegierne fra en anden sub-bruger. Lad være tomt, hvis du ikke vil have sub-bruger til at anedrve privilegier.",
+    "containers.SubuserPage.descriptionInheritPrivilegesEdit": "Nedarv privilegierne fra en anden sub-bruger. Lad være tomt, hvis du ikke vil have sub-bruger til at nedarve privilegier.",
 
     "No databases found for the specified user": "Ingen databaser fundet for den angivne bruger.",
     "Select database": "Vælg database",
