@@ -230,7 +230,7 @@ class Wms extends Controller
             $name = md5(rand(1, 999999999) . microtime());
             $disableLabels = isset($_GET["labels"]) && $_GET["labels"] == "false";
             // If QGIS is used
-            if ($qgs && sizeof($this->layers) == 1) {
+            if ($qgs && sizeof($this->layers) == 1 && $this->service != "utfgrid") {
                 $str = file_get_contents($qgs);
                 foreach ($this->layers as $layer) {
                     $split = explode(".", $layer);
@@ -292,7 +292,7 @@ class Wms extends Controller
                     default => $db . "_" . $schema . "_wms.map",
                 };
                 $useWmsSource = false;
-                if ($source = $this->getWmsSource($db, $schema)) {
+                if ($this->service != "utfgrid" && ($source = $this->getWmsSource($db, $schema))) {
                     parse_str(parse_url($_SERVER["QUERY_STRING"])['path'], $query);
                     $query = array_change_key_case($query, CASE_UPPER);
                     // Use parameters from WMS source if set and use those from query for not set parameters

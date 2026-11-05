@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [CalVer](https://calver.org/).
 
+## [Unreleased]
+### Fixed
+- Hover tooltips (UTF grid, `format=json`) for layers rendered by QGIS Server (`wmssource` / QML). `app\controllers\Wms` sent the UTF grid request on to the layer's WMS source, so QGIS Server answered with a PNG and Vidi showed no tooltip. UTF grid requests now always go to MapServer (`<db>_<schema>_wfs.map`), also with filters or `labels=false`. The layer still needs a class in GC2 for MapServer to draw the hover areas.
+
 ## [2026.10.4] - 2026-8-10
 ### Fixed
 - In app\inc\Controller the app\model\User object was instantiated with injection of the Connection object from Controller, which is not correct.  
