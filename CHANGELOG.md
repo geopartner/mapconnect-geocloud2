@@ -7,7 +7,9 @@ and this project adheres to [CalVer](https://calver.org/).
 
 ## [Unreleased]
 ### Fixed
+- Layers rendered by QGIS Server (QML style) now keep their scale range. `app\models\Qgisfile` copied only the children of the QML root into the layer's QGIS project and wrote a fixed `minScale="1000000000"`, so the scale range QGIS stores on the root element (`hasScaleBasedVisibilityFlag`, `minScale`, `maxScale`) was lost and QGIS Server drew the layer at every scale. GC2's own `maxscaledenom` only reaches MapServer. The QGIS project is written when the qml is saved, so existing layers get their range when their qml is saved again.
 - Hover tooltips (UTF grid, `format=json`) for layers rendered by QGIS Server (`wmssource` / QML). `app\controllers\Wms` sent the UTF grid request on to the layer's WMS source, so QGIS Server answered with a PNG and Vidi showed no tooltip. UTF grid requests now always go to MapServer (`<db>_<schema>_wfs.map`), also with filters or `labels=false`. The layer still needs a class in GC2 for MapServer to draw the hover areas.
+
 
 ## [2026.10.4] - 2026-8-10
 ### Fixed
