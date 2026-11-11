@@ -121,7 +121,15 @@ class Processqgis extends Controller
                         preg_match("/(?<=typename\=)\S*/", $dataSource, $matches);
                         $split = explode(":", str_replace("'", "", $matches[0]));
                         $schema = explode("/", $parsed["path"])[3];
-                        $table = $split[1];
+                        
+                        // If $split[1] contains a . then split it and take the last part as the table name
+                        if (str_contains($split[1], '.')) {
+                            $parts = explode('.', $split[1]);
+                            $table = end($parts);
+                        } else {
+                            $table = $split[1];
+                        }
+                        
                     } else {
                         $parsed = parse_url($dataSource);
                         $schema = explode("/", $parsed["path"])[3];
