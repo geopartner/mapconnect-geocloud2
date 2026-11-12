@@ -90,7 +90,7 @@ class Qgisfile extends Model
             %13$s
           </projectcrs>
           <projectlayers>
-            <maplayer type="vector" geometry="%3$s" wkbType="%3$s" labelsEnabled="1" minScale="1000000000">
+            <maplayer type="vector" geometry="%3$s" wkbType="%3$s" labelsEnabled="1" %15$s>
               <id>%1$s.%2$s</id>
               <datasource>dbname="%4$s" host=%5$s port=%6$s user="%11$s" password="%12$s" key="%7$s" srid=%8$s type=%3$s checkPrimaryKeyUnicity="0" table="%1$s"."%2$s" (%9$s) sql=</datasource>
               <layername>%1$s.%2$s</layername>
@@ -113,12 +113,20 @@ class Qgisfile extends Model
         foreach ($xml->children() as $child) {
             $innerQml .= $child->asXML();
         }
+        // The layer's scale range is set on the QML root element (QGIS style category "Rendering"), which is not
+        // copied above. Without it QGIS Server draws the layer at every scale.
+        $scaleRange = 'minScale="1000000000"';
+        if ((string)$xml['hasScaleBasedVisibilityFlag'] === '1') {
+            $minScale = is_numeric((string)$xml['minScale']) ? (float)$xml['minScale'] : 0;
+            $maxScale = is_numeric((string)$xml['maxScale']) ? (float)$xml['maxScale'] : 0;
+            $scaleRange = sprintf('hasScaleBasedVisibilityFlag="1" minScale="%s" maxScale="%s"', $minScale, $maxScale);
+        }
         $type = match ($cols['type']) {
             'POINT', 'MULTIPOINT' => 'Point',
             'POLYGON', 'MULTIPOLYGON' => 'Polygon',
             'LINESTRING', 'MULTILINESTRING' => 'Line',
         };
-        $result = sprintf($qgs, $schema, $rel, $type, $this->connection->database, $this->connection->host, $this->connection->port, $pkey, $cols['srid'], $cols['f_geometry_column'], $innerQml, $this->connection->user, $this->connection->password, $this->spatialRefSys("3857"), $this->spatialRefSys($cols['srid']));
+        $result = sprintf($qgs, $schema, $rel, $type, $this->connection->database, $this->connection->host, $this->connection->port, $pkey, $cols['srid'], $cols['f_geometry_column'], $innerQml, $this->connection->user, $this->connection->password, $this->spatialRefSys("3857"), $this->spatialRefSys($cols['srid']), $scaleRange);
         return $this->writeQgisfile($result, $rel, $cols['f_geometry_column']);
     }
 }
